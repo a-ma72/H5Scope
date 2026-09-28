@@ -221,13 +221,62 @@ class PlotWidget(QWidget):
     def _name_extent(self) -> int:
         return QFontMetrics(self.font()).height() + 4
 
+    def _draw_turned(self, painter: QPainter, text: str, x: int, top: int, height: int,
+                     colour: QColor, metrics: QFontMetrics) -> None:
+        extent = metrics.height() + 4
+        shown = metrics.elidedText(text, Qt.TextElideMode.ElideRight, height)
+        band = QRect(x, top, extent, height)
+        painter.save()
+        painter.translate(band.center())
+        painter.rotate(-90)
+        painter.setPen(colour)
+        painter.drawText(QRect(-height // 2, -extent // 2, height, extent),
+                         Qt.AlignmentFlag.AlignCenter, shown)
+        painter.restore()
+        if shown != text:
+            self._legend_tips.append((band, text))
+
+    def _y_layout(self):
+        """Columns from the outside in: each own axis, then the common one.
+
+        A name sits outside that axis's numbers, and only when there is one
+        to write. The common name is absent once every line has left that
+        axis. An own axis takes the curve's name: the column is that curve.
+        """
+        extent = self._name_extent()
+        columns = []
+        x = 0
+        for index in range(self._plot.line_count()):
+            if not self._plot.own_axis(index):
+                continue
+            name = self._plot.line_name(index)
+            name_w = extent if name else 0
+            columns.append({
+                "kind": "own",
+                "series": index,
+                "name": name,
+                "colour": self._plot.line_colour(index),
+                "name_x": x,
+                "num_x": x + name_w,
+            })
+            x += name_w + _OWN_COLUMN
+        _own, common = self._columns()
+        if common:
+            name = self._y_label or None
+            name_w = extent if name else 0
+            columns.append({
+                "kind": "common",
+                "series": None,
+                "name": name,
+                "colour": None,
+                "name_x": x,
+                "num_x": x + name_w,
+            })
+            x += name_w + _OWN_COLUMN
+        return columns, x
+
     def _pane(self) -> tuple[int, int, int, int]:
-        own, common = self._columns()
-        # The name is outermost: under the numbers along x, and to the left of
-        # every y column. It is only there when there is a name to write.
-        left = _OWN_COLUMN * (own + common)
-        if self._y_label and common:
-            left += self._name_extent()
+        _columns, left = self._y_layout()
         bottom = _BOTTOM + (self._name_extent() if self._x_label else 0)
         width = max(1, self.width() - left - _RIGHT)
         height = max(1, self.height() - _TOP - bottom)
@@ -305,10 +354,9 @@ class PlotWidget(QWidget):
                     painter.drawLine(left, y, left + width, y)
         painter.setPen(QPen(ink, 1.0))
         painter.drawRect(area.adjusted(0, 0, -1, -1))
-        slots = {}
-        for tick in self._ticks:
-            if tick.axis == 2 and tick.series not in slots:
-                slots[tick.series] = len(slots)
+        columns, _margin = self._y_layout()
+        by_series = {column["series"]: column for column in columns if column["kind"] == "own"}
+        common_col = next((column for column in columns if column["kind"] == "common"), None)
         for tick in self._ticks:
             if not tick.labeled:
                 continue
@@ -317,15 +365,15 @@ class PlotWidget(QWidget):
                 x = left + int(round(tick.x))
                 painter.drawText(QRect(x - 48, top + height + 2, 96, _BOTTOM - 4),
                                  Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, text)
-            elif tick.axis == 1:
+            elif tick.axis == 1 and common_col is not None:
                 y = top + int(round(tick.y))
-                painter.drawText(QRect(left - _OWN_COLUMN, y - 8, _OWN_COLUMN - 6, 16),
+                painter.drawText(QRect(common_col["num_x"], y - 8, _OWN_COLUMN - 6, 16),
                                  Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, text)
-            else:
+            elif tick.axis == 2 and tick.series in by_series:
                 y = top + int(round(tick.y))
-                slot = slots.get(tick.series, 0)
+                column = by_series[tick.series]
                 painter.setPen(QColor(tick.red, tick.green, tick.blue))
-                painter.drawText(QRect(slot * _OWN_COLUMN, y - 8, _OWN_COLUMN - 6, 16),
+                painter.drawText(QRect(column["num_x"], y - 8, _OWN_COLUMN - 6, 16),
                                  Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, text)
                 painter.setPen(QPen(ink, 1.0))
         if self._xy is not None and len(self._runs) != 0:
@@ -419,10 +467,10 @@ class PlotWidget(QWidget):
         # Under the numbers, and up the side outside every y column. A name
         # that does not fit keeps the part that does and shows the rest when
         # the pointer is on it. The common y name is absent once every line
-        # has left that axis: there is no column left for it to name.
+        # has left that axis: there is no column left for it to name. An own
+        # axis takes the curve's name, in the colour the curve is drawn.
         metrics = QFontMetrics(painter.font())
         extent = metrics.height() + 4
-        _own, common = self._columns()
         if self._x_label and width > 0:
             shown = metrics.elidedText(self._x_label, Qt.TextElideMode.ElideRight, width)
             rect = QRect(left, top + height + _BOTTOM, width, extent)
@@ -431,18 +479,13 @@ class PlotWidget(QWidget):
                              shown)
             if shown != self._x_label:
                 self._legend_tips.append((rect, self._x_label))
-        if self._y_label and common and height > 0:
-            shown = metrics.elidedText(self._y_label, Qt.TextElideMode.ElideRight, height)
-            band = QRect(left - extent, top, extent, height)
-            painter.save()
-            painter.translate(band.center())
-            painter.rotate(-90)
-            painter.setPen(ink)
-            painter.drawText(QRect(-height // 2, -extent // 2, height, extent),
-                             Qt.AlignmentFlag.AlignCenter, shown)
-            painter.restore()
-            if shown != self._y_label:
-                self._legend_tips.append((band, self._y_label))
+        if height <= 0:
+            return
+        for column in self._y_layout()[0]:
+            if not column["name"]:
+                continue
+            colour = ink if column["colour"] is None else QColor(*column["colour"])
+            self._draw_turned(painter, column["name"], column["name_x"], top, height, colour, metrics)
 
     def _paint_band_readout(self, painter: QPainter, left: int, top: int, width: int,
                              height: int, ink: QColor) -> None:

@@ -134,6 +134,10 @@ class MplView:
                 axes.set_ylim(low, high)
                 if self.plot.y_log() and low > 0.0 and high > low:
                     axes.set_yscale("log")
+                # The column is that curve, so it carries the curve's name.
+                name = self.plot.line_name(line)
+                if name:
+                    axes.set_ylabel(name, color=colour)
             else:
                 axes = self.ax
             drawn, = axes.plot(x, y, color=colour, linewidth=max(float(line_runs[0].width), 0.8),
@@ -146,7 +150,8 @@ class MplView:
         if handles:
             legend = self.ax.legend(handles=handles, loc="upper right", frameon=True)
             self._artists.append(legend)
-        self.figure.subplots_adjust(left=0.12 + 0.06 * own_slot)
+        named = sum(1 for column in self._own if column.get_ylabel())
+        self.figure.subplots_adjust(left=0.12 + 0.06 * own_slot + 0.05 * named)
 
     def _own_axes(self, colour, outward: float):
         # twinx is how the x axis is shared. The spine does not stay where

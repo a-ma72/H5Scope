@@ -316,6 +316,11 @@ class Plot:
             return None
         return self._names[index]
 
+    def line_colour(self, index: int):
+        if index < 0 or index >= len(self._colours):
+            return None
+        return self._colours[index]
+
     def named_lines(self):
         """Lines that have a name, in the order they were added, with the colour they were drawn in."""
         return [
