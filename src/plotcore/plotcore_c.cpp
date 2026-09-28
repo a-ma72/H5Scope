@@ -459,6 +459,30 @@ void h5plot_set_xlog(H5Plot* plot, int on)
     plot->store.setXLog(on != 0);
 }
 
+void h5plot_set_x_log_base(H5Plot* plot, double base)
+{
+    if (plot != nullptr) {
+        plot->camera.setXLogBase(base);
+    }
+}
+
+void h5plot_set_y_log_base(H5Plot* plot, double base)
+{
+    if (plot != nullptr) {
+        plot->camera.setYLogBase(base);
+    }
+}
+
+double h5plot_x_log_base(const H5Plot* plot)
+{
+    return plot != nullptr ? plot->camera.xLogBase() : 10.0;
+}
+
+double h5plot_y_log_base(const H5Plot* plot)
+{
+    return plot != nullptr ? plot->camera.yLogBase() : 10.0;
+}
+
 void h5plot_reset_view(H5Plot* plot)
 {
     if (plot != nullptr) {
@@ -489,6 +513,14 @@ int h5plot_zoom_rect(H5Plot* plot, double x0, double y0, double x1, double y1)
         return 0;
     }
     return plot->camera.zoomToRegion(x0, y0, x1, y1, plot->width, plot->height) ? 1 : 0;
+}
+
+void h5plot_set_range(H5Plot* plot, double x0, double x1, double y0, double y1)
+{
+    if (plot == nullptr) {
+        return;
+    }
+    plot->camera.setViewRange(x0, x1, y0, y1);
 }
 
 void h5plot_set_own_axis(H5Plot* plot, int index, int on)

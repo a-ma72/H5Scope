@@ -67,9 +67,11 @@ def _log_label(value: float, base: float = 10.0) -> str:
     return lead + "×" + power + _raised(exponent)
 
 
-def _tick_text(tick) -> str:
+def _tick_text(tick, x_base: float, y_base: float) -> str:
+    # The value is already a power of the axis base. Writing it in base ten
+    # turns 16 into 1.6×10¹, which is not the power the tick is standing on.
     if tick.logarithmic:
-        return _log_label(tick.value)
+        return _log_label(tick.value, x_base if tick.axis == 0 else y_base)
     return _label(tick.value)
 
 
@@ -310,6 +312,18 @@ class PlotWidget(QWidget):
         self._plot.set_x_log(on)
         self._reproject()
 
+    def set_x_log_base(self, base: float):
+        self._plot.set_x_log_base(base)
+        self._reproject()
+
+    def set_y_log_base(self, base: float):
+        self._plot.set_y_log_base(base)
+        self._reproject()
+
+    def set_range(self, x0=None, x1=None, y0=None, y1=None):
+        self._plot.set_range(x0, x1, y0, y1)
+        self._reproject()
+
     def set_x_label(self, text: str):
         self._x_label = str(text).strip() if text else ""
         self._reproject()
@@ -334,6 +348,8 @@ class PlotWidget(QWidget):
         rule = QColor(40, 40, 40)
         ink = QColor(220, 220, 220)
         painter.setPen(QPen(rule, 1.0))
+        columns, _margin = self._y_layout()
+        by_series = {column["series"]: column for column in columns if column["kind"] == "own"}
         for tick in self._ticks:
             if tick.axis == 2:
                 continue
@@ -352,15 +368,34 @@ class PlotWidget(QWidget):
                     painter.drawLine(left, y, left + 6, y)
                 else:
                     painter.drawLine(left, y, left + width, y)
+        # An own axis is a second scale. Its rules do not cross the pane:
+        # they would meet the other curves at values those curves do not have.
+        # The spine is the right edge of that curve's column, in its colour,
+        # and the marks sit in the gap the numbers already leave. A one-pixel
+        # stroke with smoothing on lands half on each of two columns, so the
+        # colour the curve was drawn in is not the colour on the spine.
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        for column in by_series.values():
+            spine = column["num_x"] + _OWN_COLUMN - 1
+            painter.setPen(QPen(QColor(*column["colour"]), 1.0))
+            painter.drawLine(spine, top, spine, top + height)
+        for tick in self._ticks:
+            if tick.axis != 2 or tick.series not in by_series:
+                continue
+            column = by_series[tick.series]
+            spine = column["num_x"] + _OWN_COLUMN - 1
+            y = top + int(round(tick.y))
+            mark = 3 if tick.logarithmic and not tick.labeled else 5
+            painter.setPen(QPen(QColor(tick.red, tick.green, tick.blue), 1.0))
+            painter.drawLine(spine - mark, y, spine, y)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(QPen(ink, 1.0))
         painter.drawRect(area.adjusted(0, 0, -1, -1))
-        columns, _margin = self._y_layout()
-        by_series = {column["series"]: column for column in columns if column["kind"] == "own"}
         common_col = next((column for column in columns if column["kind"] == "common"), None)
         for tick in self._ticks:
             if not tick.labeled:
                 continue
-            text = _tick_text(tick)
+            text = _tick_text(tick, self._plot.x_log_base(), self._plot.y_log_base())
             if tick.axis == 0:
                 x = left + int(round(tick.x))
                 painter.drawText(QRect(x - 48, top + height + 2, 96, _BOTTOM - 4),

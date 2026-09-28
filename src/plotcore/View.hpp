@@ -58,6 +58,11 @@ public:
     bool zoomToRegion(double px0, double py0, double px1, double py1, double areaWidth,
                       double areaHeight);
 
+    /// The same window a rectangle would open, named in data values. A bound
+    /// at or below zero on a logarithmic axis is clipped to the part that
+    /// exists; a window with nothing above zero is the whole axis.
+    void setViewRange(double x0, double x1, double y0, double y1);
+
     [[nodiscard]] PlotView frame(double width, double height, double pixelRatio,
                                  int lineCount) const;
 
@@ -95,7 +100,6 @@ private:
                                   double base) const;
     void zoomedAxis(double& zoom, double& pan, double low, double high, double fraction,
                     double factor, bool logarithmic, double base, double minimumSpan);
-    void setViewRange(double x0, double x1, double y0, double y1);
     [[nodiscard]] double valueAlong(double low, double high, double at, bool logarithmic,
                                     double base) const;
     [[nodiscard]] double maxZoom() const;

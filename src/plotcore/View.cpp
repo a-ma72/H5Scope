@@ -47,6 +47,11 @@ void PlotCamera::setYLog(bool on)
 
 void PlotCamera::setXLogBase(double base)
 {
+    // A base at or below one is not a base. There is no nearest legal value
+    // to correct it to, so it is refused and the axis stays as it was.
+    if (!usableBase(base) || xLogBase_ == base) {
+        return;
+    }
     xLogBase_ = base;
     if (xLog_) {
         reset();
@@ -55,6 +60,9 @@ void PlotCamera::setXLogBase(double base)
 
 void PlotCamera::setYLogBase(double base)
 {
+    if (!usableBase(base) || yLogBase_ == base) {
+        return;
+    }
     yLogBase_ = base;
     if (yLog_) {
         reset();

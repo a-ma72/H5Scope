@@ -14,8 +14,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import math
+
 import numpy as np
-from PySide6.QtWidgets import QApplication, QCheckBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from h5plot import PlotWidget
 
@@ -40,11 +50,25 @@ def main() -> int:
     log_y.toggled.connect(plot.set_y_log)
     log_x = QCheckBox("Log x")
     log_x.toggled.connect(plot.set_x_log)
+    bases = (10.0, 2.0, math.e)
+    base_names = ("base 10", "base 2", "base e")
+    base_i = {"i": 0}
+    base = QPushButton(base_names[0])
+
+    def cycle_base() -> None:
+        base_i["i"] = (base_i["i"] + 1) % len(bases)
+        chosen = bases[base_i["i"]]
+        plot.set_x_log_base(chosen)
+        plot.set_y_log_base(chosen)
+        base.setText(base_names[base_i["i"]])
+
+    base.clicked.connect(cycle_base)
     scales = QWidget()
     scales_layout = QHBoxLayout(scales)
     scales_layout.setContentsMargins(8, 0, 8, 0)
     scales_layout.addWidget(log_y)
     scales_layout.addWidget(log_x)
+    scales_layout.addWidget(base)
     scales_layout.addStretch(1)
     hint = QLabel("Links verschiebt die Ansicht, rechts zieht ein Rechteck "
                   "und nennt den Bereich, den es öffnet. "

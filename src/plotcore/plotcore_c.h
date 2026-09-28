@@ -85,6 +85,13 @@ H5PLOT_API void h5plot_clear(H5Plot* plot);
 H5PLOT_API void h5plot_set_pane(H5Plot* plot, int width, int height, double pixel_ratio);
 H5PLOT_API void h5plot_set_ylog(H5Plot* plot, int on);
 H5PLOT_API void h5plot_set_xlog(H5Plot* plot, int on);
+/* A base at or below one is refused and the axis keeps its base. The base
+ * numbers the powers. It does not move a point: where a value sits is a
+ * ratio of two logarithms, so the base cancels. */
+H5PLOT_API void h5plot_set_x_log_base(H5Plot* plot, double base);
+H5PLOT_API void h5plot_set_y_log_base(H5Plot* plot, double base);
+H5PLOT_API double h5plot_x_log_base(const H5Plot* plot);
+H5PLOT_API double h5plot_y_log_base(const H5Plot* plot);
 H5PLOT_API void h5plot_reset_view(H5Plot* plot);
 H5PLOT_API void h5plot_wheel(H5Plot* plot, double px, double py, double factor, int shift,
                              int control);
@@ -93,6 +100,10 @@ H5PLOT_API void h5plot_pan(H5Plot* plot, double dx, double dy);
 /* Pane-local pixels, y downward. Returns 1 when the window moved.
  * A band under 12 pixels on either side is refused and returns 0. */
 H5PLOT_API int h5plot_zoom_rect(H5Plot* plot, double x0, double y0, double x1, double y1);
+
+/* Open the window on these data values. A bound at or below zero on a
+ * logarithmic axis is clipped to the part of the axis that exists. */
+H5PLOT_API void h5plot_set_range(H5Plot* plot, double x0, double x1, double y0, double y1);
 
 /* A shifted line is drawn on its own y axis: the common window, plus that
  * line's y shift. The common extent is unchanged, so the other curves stay.

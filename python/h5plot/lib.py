@@ -95,11 +95,18 @@ _lib.h5plot_clear.argtypes = [c_void_p]
 _lib.h5plot_set_pane.argtypes = [c_void_p, c_int, c_int, c_double]
 _lib.h5plot_set_ylog.argtypes = [c_void_p, c_int]
 _lib.h5plot_set_xlog.argtypes = [c_void_p, c_int]
+_lib.h5plot_set_x_log_base.argtypes = [c_void_p, c_double]
+_lib.h5plot_set_y_log_base.argtypes = [c_void_p, c_double]
+_lib.h5plot_x_log_base.argtypes = [c_void_p]
+_lib.h5plot_x_log_base.restype = c_double
+_lib.h5plot_y_log_base.argtypes = [c_void_p]
+_lib.h5plot_y_log_base.restype = c_double
 _lib.h5plot_reset_view.argtypes = [c_void_p]
 _lib.h5plot_wheel.argtypes = [c_void_p, c_double, c_double, c_double, c_int, c_int]
 _lib.h5plot_pan.argtypes = [c_void_p, c_double, c_double]
 _lib.h5plot_zoom_rect.argtypes = [c_void_p, c_double, c_double, c_double, c_double]
 _lib.h5plot_zoom_rect.restype = c_int
+_lib.h5plot_set_range.argtypes = [c_void_p, c_double, c_double, c_double, c_double]
 _lib.h5plot_set_own_axis.argtypes = [c_void_p, c_int, c_int]
 _lib.h5plot_line_count.argtypes = [c_void_p]
 _lib.h5plot_line_count.restype = c_int
@@ -343,6 +350,31 @@ class Plot:
     def set_x_log(self, on: bool) -> None:
         _lib.h5plot_set_xlog(self._handle, 1 if on else 0)
 
+    def _base(self, base: float) -> float:
+        import math
+
+        value = float(base)
+        if not math.isfinite(value) or not value > 1.0:
+            raise ValueError("a logarithmic base is a number above one")
+        return value
+
+    def set_x_log_base(self, base: float) -> None:
+        """Number the powers of a logarithmic x. A base at or below one is refused.
+
+        Where a point sits does not change: it is a ratio of two logarithms,
+        and the base cancels. The ticks are the powers of this base.
+        """
+        _lib.h5plot_set_x_log_base(self._handle, self._base(base))
+
+    def set_y_log_base(self, base: float) -> None:
+        _lib.h5plot_set_y_log_base(self._handle, self._base(base))
+
+    def x_log_base(self) -> float:
+        return float(_lib.h5plot_x_log_base(self._handle))
+
+    def y_log_base(self) -> float:
+        return float(_lib.h5plot_y_log_base(self._handle))
+
     def reset_view(self) -> None:
         _lib.h5plot_reset_view(self._handle)
 
@@ -354,6 +386,22 @@ class Plot:
 
     def zoom_rect(self, x0: float, y0: float, x1: float, y1: float) -> bool:
         return bool(_lib.h5plot_zoom_rect(self._handle, x0, y0, x1, y1))
+
+    def set_range(self, x0=None, x1=None, y0=None, y1=None) -> None:
+        """Open the window on these values. An axis left out stays as it is.
+
+        On a logarithmic axis a bound at or below zero is not a place, so it
+        is clipped to the part of the axis that exists.
+        """
+        if x0 is None:
+            x0 = self.view_min_x()
+        if x1 is None:
+            x1 = self.view_max_x()
+        if y0 is None:
+            y0 = self.view_min_y()
+        if y1 is None:
+            y1 = self.view_max_y()
+        _lib.h5plot_set_range(self._handle, float(x0), float(x1), float(y0), float(y1))
 
     def line_count(self) -> int:
         return int(_lib.h5plot_line_count(self._handle))
