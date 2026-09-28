@@ -1,0 +1,353 @@
+// SPDX-FileCopyrightText: 2026 Andreas Martin
+// SPDX-License-Identifier: GPL-3.0-only
+
+#include "plotcore/PlotWidget.hpp"
+
+#include "plotcore/LineStore.hpp"
+
+#include "gui/PlotLevels.hpp"
+
+#include <QtCore/QMetaObject>
+#include <QtGui/QMouseEvent>
+#include <QtGui/QPainter>
+#include <QtGui/QWheelEvent>
+
+#include <algorithm>
+#include <cmath>
+
+namespace gui {
+namespace {
+
+constexpr int kGutterLeft = 56;
+constexpr int kGutterBottom = 28;
+constexpr int kGutterTop = 8;
+constexpr int kGutterRight = 8;
+constexpr int kTickTarget = 6;
+
+double niceStep(double span, int target)
+{
+    if (!(span > 0.0)) {
+        return 0.0;
+    }
+    const double raw = span / static_cast<double>(std::max(1, target));
+    const double magnitude = std::pow(10.0, std::floor(std::log10(raw)));
+    const double scaled = raw / magnitude;
+    const double factor = scaled <= 1.0 ? 1.0 : scaled <= 2.0 ? 2.0 : scaled <= 5.0 ? 5.0 : 10.0;
+    return magnitude * factor;
+}
+
+} // namespace
+
+PlotWidget::PlotWidget(QWidget* parent) : QWidget(parent)
+{
+    setMouseTracking(true);
+    setMinimumSize(160, 120);
+    setAutoFillBackground(false);
+}
+
+PlotWidget::~PlotWidget()
+{
+    if (store_ != nullptr) {
+        store_->onChanged = nullptr;
+    }
+}
+
+void PlotWidget::setLines(std::vector<PlotLine> lines, const PlotAxis& axis)
+{
+    lines_ = std::move(lines);
+    axis_ = axis;
+    update();
+}
+
+void PlotWidget::clear()
+{
+    lines_.clear();
+    axis_ = PlotAxis{};
+    update();
+}
+
+void PlotWidget::setStore(LineStore* store)
+{
+    if (store_ == store) {
+        return;
+    }
+    if (store_ != nullptr) {
+        store_->onChanged = nullptr;
+    }
+    store_ = store;
+    if (store_ != nullptr) {
+        store_->onChanged = [this] {
+            if (!refilling_) {
+                refill();
+            }
+        };
+        refill();
+    }
+}
+
+LineStore* PlotWidget::store() const
+{
+    return store_;
+}
+
+void PlotWidget::setXLog(bool on)
+{
+    camera_.setXLog(on);
+    applyView();
+}
+
+void PlotWidget::setYLog(bool on)
+{
+    camera_.setYLog(on);
+    applyView();
+}
+
+void PlotWidget::setXLogBase(double base)
+{
+    camera_.setXLogBase(base);
+    applyView();
+}
+
+void PlotWidget::setYLogBase(double base)
+{
+    camera_.setYLogBase(base);
+    applyView();
+}
+
+void PlotWidget::setDataExtent(double xMin, double xMax, double yMin, double yMax,
+                              double xPositiveMin, double yPositiveMin)
+{
+    camera_.setDataExtent(xMin, xMax, yMin, yMax, xPositiveMin, yPositiveMin);
+}
+
+void PlotWidget::resetView()
+{
+    camera_.reset();
+    applyView();
+}
+
+int PlotWidget::paneColumns() const
+{
+    const qreal ratio = devicePixelRatioF();
+    const int pixels = std::max(1, static_cast<int>(std::lround(plotArea().width() * ratio)));
+    return std::max(kColumnQuantum, (pixels / kColumnQuantum) * kColumnQuantum);
+}
+
+QRect PlotWidget::plotArea() const
+{
+    const int left = kGutterLeft;
+    const int top = kGutterTop;
+    const int right = std::max(left + 1, width() - kGutterRight);
+    const int bottom = std::max(top + 1, height() - kGutterBottom);
+    return QRect(QPoint(left, top), QPoint(right - 1, bottom - 1));
+}
+
+PlotView PlotWidget::viewForFrame() const
+{
+    const QRect area = plotArea();
+    return camera_.frame(area.width(), area.height(), devicePixelRatioF(), lineCount());
+}
+
+void PlotWidget::projectAll()
+{
+    points_.clear();
+    runs_.clear();
+    const auto lines = static_cast<std::size_t>(lineCount());
+    const PlotView view = viewForFrame();
+    lineRuns_.assign(lines + 1, 0);
+    for (std::size_t line = 0; line < lines; ++line) {
+        lineRuns_[line] = static_cast<int>(runs_.size());
+        projectLine(lines_[line], axis_, lineView(lines_[line], view), points_, runs_);
+    }
+    lineRuns_[lines] = static_cast<int>(runs_.size());
+    drawnPoints_ = static_cast<int>(points_.size());
+    drawnRuns_ = static_cast<int>(runs_.size());
+}
+
+void PlotWidget::refill()
+{
+    if (store_ == nullptr || refilling_) {
+        return;
+    }
+    refilling_ = true;
+    store_->setPaneColumns(paneColumns());
+    store_->setVisibleRange(viewMinX(), viewMaxX());
+    std::vector<PlotLine> lines;
+    PlotAxis axis;
+    store_->fillInto(lines, axis);
+    setLines(std::move(lines), axis);
+    setDataExtent(store_->xMin(), store_->xMax(), store_->minimum(), store_->maximum(),
+                  store_->xPositiveMinimum(), store_->positiveMinimum());
+    store_->releaseRetired();
+    refilling_ = false;
+}
+
+void PlotWidget::applyView()
+{
+    if (store_ != nullptr) {
+        store_->setVisibleRange(viewMinX(), viewMaxX());
+    }
+    update();
+    Q_EMIT viewChanged();
+}
+
+void PlotWidget::zoomAt(const QPointF& pos, double factor, Qt::KeyboardModifiers modifiers)
+{
+    const QRect area = plotArea();
+    if (area.width() <= 0 || area.height() <= 0) {
+        return;
+    }
+    const double fx = (pos.x() - area.x()) / static_cast<double>(area.width());
+    const double fy = 1.0 - (pos.y() - area.y()) / static_cast<double>(area.height());
+    const bool shift = modifiers.testFlag(Qt::ShiftModifier);
+    const bool control = modifiers.testFlag(Qt::ControlModifier);
+    camera_.zoomAt(fx, fy, factor, shift && !control, control && !shift);
+    applyView();
+}
+
+void PlotWidget::panBy(double dx, double dy)
+{
+    const QRect area = plotArea();
+    camera_.panBy(dx, dy, area.width(), area.height());
+    applyView();
+}
+
+void PlotWidget::paintEvent(QPaintEvent*)
+{
+    projectAll();
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.fillRect(rect(), ground_);
+    const QRect area = plotArea();
+    painter.fillRect(area, pane_);
+    drawChrome(painter, area);
+    painter.save();
+    painter.setClipRect(area);
+    painter.translate(area.topLeft());
+    drawLines(painter);
+    painter.restore();
+    QMetaObject::invokeMethod(this, &PlotWidget::drew, Qt::QueuedConnection);
+}
+
+void PlotWidget::drawChrome(QPainter& painter, const QRect& area)
+{
+    painter.setPen(QPen(rule_, 1.0));
+    const PlotView view = viewForFrame();
+    const double xSpan = view.xMax - view.xMin;
+    const double ySpan = view.yMax - view.yMin;
+    const double xStep = niceStep(xSpan, kTickTarget);
+    const double yStep = niceStep(ySpan, kTickTarget);
+
+    if (xStep > 0.0 && std::isfinite(view.xMin) && std::isfinite(view.xMax)) {
+        const double first = std::ceil(view.xMin / xStep) * xStep;
+        for (double x = first; x <= view.xMax + xStep * 0.5; x += xStep) {
+            const double fraction = xFractionOf(x, view);
+            if (!std::isfinite(fraction)) {
+                continue;
+            }
+            const int px = area.left() + static_cast<int>(std::lround(fraction * area.width()));
+            painter.drawLine(px, area.top(), px, area.bottom());
+            painter.setPen(ink_);
+            painter.drawText(QRect(px - 40, area.bottom() + 4, 80, kGutterBottom - 6),
+                             Qt::AlignHCenter | Qt::AlignTop, QString::number(x, 'g', 6));
+            painter.setPen(QPen(rule_, 1.0));
+        }
+    }
+    if (yStep > 0.0 && std::isfinite(view.yMin) && std::isfinite(view.yMax)) {
+        const double first = std::ceil(view.yMin / yStep) * yStep;
+        for (double y = first; y <= view.yMax + yStep * 0.5; y += yStep) {
+            const double fraction = yFractionOf(y, view);
+            if (!std::isfinite(fraction)) {
+                continue;
+            }
+            const int py = area.bottom() - static_cast<int>(std::lround(fraction * area.height()));
+            painter.drawLine(area.left(), py, area.right(), py);
+            painter.setPen(ink_);
+            painter.drawText(QRect(0, py - 8, kGutterLeft - 6, 16),
+                             Qt::AlignRight | Qt::AlignVCenter, QString::number(y, 'g', 6));
+            painter.setPen(QPen(rule_, 1.0));
+        }
+    }
+    painter.setPen(QPen(ink_, 1.0));
+    painter.drawRect(area.adjusted(0, 0, -1, -1));
+}
+
+void PlotWidget::drawLines(QPainter& painter)
+{
+    for (std::size_t line = 0; line < lines_.size(); ++line) {
+        QColor colour = lines_[line].colour;
+        colour.setAlphaF(std::clamp(colour.alphaF() * lines_[line].opacity, 0.0, 1.0));
+        painter.setPen(QPen(colour, lines_[line].width, Qt::SolidLine, Qt::FlatCap, Qt::RoundJoin));
+        for (int r = lineRuns_[line]; r < lineRuns_[line + 1]; ++r) {
+            const PlotRun& run = runs_[static_cast<std::size_t>(r)];
+            painter.drawPolyline(&points_[static_cast<std::size_t>(run.first)], run.count);
+        }
+    }
+}
+
+void PlotWidget::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    if (store_ != nullptr) {
+        store_->setPaneColumns(paneColumns());
+    }
+}
+
+void PlotWidget::wheelEvent(QWheelEvent* event)
+{
+    const int turned =
+        event->angleDelta().y() != 0 ? event->angleDelta().y() : event->angleDelta().x();
+    if (turned == 0) {
+        return;
+    }
+    zoomAt(event->position(), std::pow(1.25, static_cast<double>(turned) / 120.0),
+           event->modifiers());
+    event->accept();
+}
+
+void PlotWidget::mousePressEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton) {
+        dragging_ = true;
+        lastDrag_ = event->pos();
+        setCursor(Qt::ClosedHandCursor);
+        event->accept();
+        return;
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void PlotWidget::mouseMoveEvent(QMouseEvent* event)
+{
+    if (dragging_) {
+        const QPoint delta = event->pos() - lastDrag_;
+        lastDrag_ = event->pos();
+        panBy(delta.x(), delta.y());
+        event->accept();
+        return;
+    }
+    QWidget::mouseMoveEvent(event);
+}
+
+void PlotWidget::mouseReleaseEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton && dragging_) {
+        dragging_ = false;
+        unsetCursor();
+        event->accept();
+        return;
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
+void PlotWidget::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton) {
+        resetView();
+        event->accept();
+        return;
+    }
+    QWidget::mouseDoubleClickEvent(event);
+}
+
+} // namespace gui
