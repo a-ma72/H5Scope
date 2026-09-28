@@ -39,6 +39,7 @@ class MplView:
         self._artists: list = []
         self._band = None
         self._band_artist = None
+        self._band_labels: list = []
         self._drag = None
         self._shift = None
         self._pane = (800, 400)
@@ -277,23 +278,70 @@ class MplView:
     def _show_band(self) -> None:
         from matplotlib.patches import Rectangle
 
+        from .widget import _axis_number
+
         start, end = self._band
-        x0 = self.plot.data_x_at(start[0])
-        x1 = self.plot.data_x_at(end[0])
-        y0 = self.plot.data_y_at(start[1])
-        y1 = self.plot.data_y_at(end[1])
+        # The corners are the same mapping the zoom uses on release, written
+        # the way the Qt window writes them. A second spelling would name a
+        # different window from the one that opens.
+        x_log = self.plot.x_log()
+        y_log = self.plot.y_log()
+        view_x0, view_x1 = self.plot.view_min_x(), self.plot.view_max_x()
+        view_y0, view_y1 = self.plot.view_min_y(), self.plot.view_max_y()
+        sx = self.plot.data_x_at(start[0])
+        ex = self.plot.data_x_at(end[0])
+        sy = self.plot.data_y_at(start[1])
+        ey = self.plot.data_y_at(end[1])
+        common_y = self.plot.line_count() == 0 or self.plot.own_count() < self.plot.line_count()
+
+        def nx(value: float) -> str:
+            return _axis_number(value, view_x0, view_x1, x_log)
+
+        def ny(value: float) -> str:
+            return _axis_number(value, view_y0, view_y1, y_log)
+
+        if common_y:
+            start_text = f"{nx(sx)}, {ny(sy)}"
+            end_text = f"{nx(ex)}, {ny(ey)}"
+            height_text = "∆" + ny(abs(ey - sy))
+        else:
+            start_text = nx(sx)
+            end_text = nx(ex)
+            height_text = ""
+        width_text = "∆" + nx(abs(ex - sx))
         if self._band_artist is None:
             self._band_artist = Rectangle(
                 (0, 0), 0, 0, facecolor=(0.7, 0.7, 0.7, 0.25), edgecolor=(0.35, 0.35, 0.35),
                 linewidth=1, zorder=5,
             )
             self.ax.add_patch(self._band_artist)
-        self._band_artist.set_xy((min(x0, x1), min(y0, y1)))
-        self._band_artist.set_width(abs(x1 - x0))
-        self._band_artist.set_height(abs(y1 - y0))
+        self._band_artist.set_xy((min(sx, ex), min(sy, ey)))
+        self._band_artist.set_width(abs(ex - sx))
+        self._band_artist.set_height(abs(ey - sy))
         self._band_artist.set_visible(True)
+        for text in self._band_labels:
+            text.remove()
+        self._band_labels.clear()
+        ink = {"color": "0.15", "fontsize": 9, "zorder": 6, "clip_on": False}
+        self._band_labels.append(self.ax.annotate(
+            start_text, xy=(sx, sy), xytext=(8, -8), textcoords="offset points",
+            ha="left", va="top", **ink))
+        self._band_labels.append(self.ax.annotate(
+            end_text, xy=(ex, ey), xytext=(8, 8), textcoords="offset points",
+            ha="left", va="bottom", **ink))
+        if abs(end[0] - start[0]) >= 48:
+            self._band_labels.append(self.ax.annotate(
+                width_text, xy=((sx + ex) / 2.0, max(sy, ey)), xytext=(0, 6),
+                textcoords="offset points", ha="center", va="bottom", **ink))
+        if height_text and abs(end[1] - start[1]) >= 24:
+            self._band_labels.append(self.ax.annotate(
+                height_text, xy=(min(sx, ex), (sy + ey) / 2.0), xytext=(-6, 0),
+                textcoords="offset points", ha="right", va="center", **ink))
         self.figure.canvas.draw_idle()
 
     def _hide_band(self) -> None:
         if self._band_artist is not None:
             self._band_artist.set_visible(False)
+        for text in self._band_labels:
+            text.remove()
+        self._band_labels.clear()

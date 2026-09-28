@@ -8,7 +8,8 @@ numbers the axes itself. The toolbar stays off.
 
     C:\\Pythonuser\\venv\\Py311-EISB1\\Scripts\\python.exe python\\h5plot\\demo_mpl.py
 
-Scroll zooms, the left button pans, the right button pulls a rectangle.
+Scroll zooms, the left button pans, the right button pulls a rectangle
+and names the window it will open.
 Alt or the middle button shifts the curve under the pointer onto an axis
 of its own. Ctrl-click puts it back. A double-click resets the window.
 """
