@@ -34,7 +34,9 @@ typedef struct H5PlotRun
 
 /* A tick in the pane set by h5plot_set_pane. y grows downward, as the
  * projected points do. axis is 0 along x, 1 on the common y, 2 on a line's
- * own y. series is that line when axis is 2, and -1 otherwise. */
+ * own y. series is that line when axis is 2, and -1 otherwise.
+ * logarithmic is set when the log locator placed it. labeled is a number;
+ * an unlabeled tick is a minor mark between two of those. */
 typedef struct H5PlotTick
 {
     double x;
@@ -46,6 +48,8 @@ typedef struct H5PlotTick
     unsigned char green;
     unsigned char blue;
     unsigned char alpha;
+    unsigned char labeled;
+    unsigned char logarithmic;
 } H5PlotTick;
 
 H5PLOT_API H5Plot* h5plot_create(void);

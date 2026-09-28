@@ -47,6 +47,8 @@ class H5PlotTick(ctypes.Structure):
         ("green", ctypes.c_ubyte),
         ("blue", ctypes.c_ubyte),
         ("alpha", ctypes.c_ubyte),
+        ("labeled", ctypes.c_ubyte),
+        ("logarithmic", ctypes.c_ubyte),
     ]
 
 

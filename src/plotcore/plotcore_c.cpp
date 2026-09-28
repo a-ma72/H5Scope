@@ -30,6 +30,201 @@ double niceStep(double span, int target)
     return magnitude * factor;
 }
 
+/// How many numbered ticks the pane has room for. PlotFrame.logTickRoom, with
+/// Theme.readout at ten pixels: two of them up the side, three along the foot.
+int logTickRoom(double extent, bool vertical)
+{
+    const double per = (vertical ? 2.0 : 3.0) * 10.0;
+    const int room = static_cast<int>(std::floor(std::max(0.0, extent) / per));
+    return std::max(2, std::min(9, room));
+}
+
+/// Which whole multiples of a power are numbered. PlotFrame.logSublabels:
+/// the power itself once more than one power is crossed, and a subset of the
+/// multiples (1, 2, 3, 4, 6 on base ten) inside a single power.
+std::vector<int> logSublabels(double low, double high, double base)
+{
+    if (!(low > 0.0) || !(high > low) || !(std::isfinite(base) && base > 1.0)) {
+        return {1};
+    }
+    // log(x)/log(b), not logOf. log(0.001)/log(10) misses -3 by an ulp, and
+    // that ulp is which multiples get a number.
+    const double lmin = std::log(low) / std::log(base);
+    const double lmax = std::log(high) / std::log(base);
+    const double below = lmin == std::floor(lmin) ? lmin - 1.0 : std::floor(lmin);
+    const int crossed = static_cast<int>(std::floor(lmax) - below);
+    if (crossed > 1) {
+        return {1};
+    }
+    std::vector<int> found;
+    if (lmax - lmin > 0.4) {
+        const int count = static_cast<int>(std::floor(std::floor(base) / 2.0)) + 1;
+        for (int i = 0; i < count; ++i) {
+            const double at = count > 1 ? static_cast<double>(i) / static_cast<double>(count - 1) : 0.0;
+            const int coefficient = static_cast<int>(std::lround(std::pow(base, at)));
+            if (std::find(found.begin(), found.end(), coefficient) == found.end()) {
+                found.push_back(coefficient);
+            }
+        }
+        return found;
+    }
+    for (int coefficient = 1; coefficient <= static_cast<int>(base); ++coefficient) {
+        found.push_back(coefficient);
+    }
+    return found;
+}
+
+struct LogTicks
+{
+    std::vector<double> majors;
+    std::vector<double> minors;
+    bool linear = false;
+};
+
+/// PlotFrame.logLocate. Majors are powers of the base. Minors are the whole
+/// multiples between them, and only while the powers themselves are not
+/// already strided. One tick in view falls back to round linear steps.
+LogTicks logLocate(double low, double high, double base, int request)
+{
+    LogTicks located;
+    if (!(low > 0.0) || !(high > low) || !(std::isfinite(base) && base > 1.0)) {
+        return located;
+    }
+    const double efmin = gui::logOf(low, base);
+    const double efmax = gui::logOf(high, base);
+    const int emin = static_cast<int>(std::ceil(efmin - 1e-10));
+    const int emax = static_cast<int>(std::floor(efmax + 1e-10));
+    const int avail = emax - emin + 1;
+
+    int wanted = std::max(2, request);
+    int stride = static_cast<int>(std::floor(static_cast<double>(avail) / static_cast<double>(wanted + 1))) + 1;
+    const int got = static_cast<int>(std::ceil(static_cast<double>(avail) / static_cast<double>(std::max(stride, 1))));
+    if (got <= wanted) {
+        wanted = got;
+    }
+    std::vector<int> decades;
+    if (wanted <= 0) {
+        decades = {emin - 1, emax + 1};
+        stride = decades[1] - decades[0];
+    } else if (wanted == 1) {
+        const int mid = static_cast<int>(std::lround((efmin + efmax) / 2.0));
+        stride = std::max(mid - (emin - 1), (emax + 1) - mid);
+        decades = {mid - stride, mid, mid + stride};
+    } else {
+        stride = (avail - 1) / (wanted - 1);
+        if (static_cast<double>(stride) < static_cast<double>(avail) / static_cast<double>(wanted)) {
+            stride = avail / wanted;
+        }
+        if (stride < 1) {
+            stride = 1;
+        }
+        const int olo = std::max(avail - stride * wanted, 0);
+        const int ohi = std::min(avail - stride * (wanted - 1), stride);
+        int offset = ((-emin) % stride + stride) % stride;
+        if (!(olo <= offset && offset < ohi)) {
+            offset = olo;
+        }
+        for (int exponent = emin + offset - stride;
+             exponent <= emax + stride && decades.size() < 1024; exponent += stride) {
+            decades.push_back(exponent);
+        }
+    }
+
+    const auto inView = [&](double value) {
+        return value >= low * (1.0 - 1e-12) && value <= high * (1.0 + 1e-12);
+    };
+    for (int exponent : decades) {
+        const double value = std::pow(base, static_cast<double>(exponent));
+        if (std::isfinite(value) && inView(value)) {
+            located.majors.push_back(value);
+        }
+    }
+
+    if (avail < 10 && base >= 3.0 && (stride == 1 || avail <= 1)) {
+        for (int exponent = emin - 1; exponent <= emax && located.minors.size() < 4096; ++exponent) {
+            const double power = std::pow(base, static_cast<double>(exponent));
+            for (int multiple = 2; multiple < base && located.minors.size() < 4096; ++multiple) {
+                const double value = static_cast<double>(multiple) * power;
+                if (std::isfinite(value) && inView(value)) {
+                    located.minors.push_back(value);
+                }
+            }
+        }
+    }
+
+    if (stride == 1 && static_cast<int>(located.majors.size() + located.minors.size()) <= 1) {
+        const double step = niceStep(high - low, 8);
+        located.minors.clear();
+        if (step > 0.0 && high > low) {
+            const double first = std::ceil(low / step - 1e-9);
+            for (int i = 0; located.minors.size() < 64; ++i) {
+                const double value = (first + static_cast<double>(i)) * step;
+                if (value > high + step * 1e-9) {
+                    break;
+                }
+                if (!std::isfinite(value)) {
+                    continue;
+                }
+                bool near = false;
+                for (double major : located.majors) {
+                    if (std::abs(major - value) < step / 2.0) {
+                        near = true;
+                    }
+                }
+                if (!near) {
+                    located.minors.push_back(value);
+                }
+            }
+        }
+        located.linear = true;
+    }
+    return located;
+}
+
+bool coefficientLabeled(double value, double base, const std::vector<int>& allowed)
+{
+    if (!(value > 0.0) || !(base > 1.0)) {
+        return false;
+    }
+    const double fx = std::log(value) / std::log(base);
+    const bool decade = std::abs(fx - std::round(fx)) < 1e-10;
+    const double exponent = decade ? std::round(fx) : std::floor(fx);
+    const int coefficient = static_cast<int>(std::lround(std::pow(base, fx - exponent)));
+    return std::find(allowed.begin(), allowed.end(), coefficient) != allowed.end();
+}
+
+void placeTick(std::vector<H5PlotTick>& ticks, const gui::AxisMapping& map, const gui::PlotView& view,
+               int axisCode, int series, double value, bool labeled, bool logarithmic, unsigned char red,
+               unsigned char green, unsigned char blue)
+{
+    if (!map.draws(value)) {
+        return;
+    }
+    const double fraction = map.fractionOf(value);
+    if (fraction < -0.001 || fraction > 1.001) {
+        return;
+    }
+    H5PlotTick tick{};
+    tick.value = value;
+    tick.axis = axisCode;
+    tick.series = series;
+    tick.red = red;
+    tick.green = green;
+    tick.blue = blue;
+    tick.alpha = 255;
+    tick.labeled = labeled ? 1 : 0;
+    tick.logarithmic = logarithmic ? 1 : 0;
+    const bool vertical = axisCode != 0;
+    if (vertical) {
+        tick.x = 0.0;
+        tick.y = view.height - fraction * view.height;
+    } else {
+        tick.x = fraction * view.width;
+        tick.y = view.height;
+    }
+    ticks.push_back(tick);
+}
+
 void appendTicks(std::vector<H5PlotTick>& ticks, const gui::PlotView& view, int axisCode, int series,
                  unsigned char red, unsigned char green, unsigned char blue)
 {
@@ -43,57 +238,36 @@ void appendTicks(std::vector<H5PlotTick>& ticks, const gui::PlotView& view, int 
         return;
     }
 
-    std::vector<double> values;
     if (logarithmic && low > 0.0 && high > low) {
-        const double from = gui::logOf(low, base);
-        const double to = gui::logOf(high, base);
-        const int first = static_cast<int>(std::ceil(from - 1e-9));
-        const int last = static_cast<int>(std::floor(to + 1e-9));
-        const int count = last - first + 1;
-        if (count >= 2) {
-            const int stride = std::max(1, (count + 5) / 6);
-            for (int k = first; k <= last; k += stride) {
-                values.push_back(std::pow(base, static_cast<double>(k)));
+        const double extent = vertical ? view.height : view.width;
+        const LogTicks located = logLocate(low, high, base, logTickRoom(extent, vertical));
+        if (!located.majors.empty() || !located.minors.empty()) {
+            const std::vector<int> allowed = logSublabels(low, high, base);
+            for (double value : located.majors) {
+                const bool labeled = located.linear || coefficientLabeled(value, base, allowed);
+                placeTick(ticks, map, view, axisCode, series, value, labeled, !located.linear, red, green,
+                          blue);
             }
-        }
-    }
-    if (values.empty()) {
-        const double step = niceStep(high - low, 6);
-        if (!(step > 0.0)) {
+            for (double value : located.minors) {
+                const bool labeled = located.linear || coefficientLabeled(value, base, allowed);
+                placeTick(ticks, map, view, axisCode, series, value, labeled, !located.linear, red, green,
+                          blue);
+            }
             return;
-        }
-        const double first = std::ceil(low / step - 1e-9) * step;
-        for (double value = first; value <= high + step * 0.5 && values.size() < 12; value += step) {
-            if (std::isfinite(value)) {
-                values.push_back(value);
-            }
         }
     }
 
-    for (double value : values) {
-        if (!map.draws(value)) {
-            continue;
+    const double step = niceStep(high - low, 6);
+    if (!(step > 0.0)) {
+        return;
+    }
+    const double first = std::ceil(low / step - 1e-9) * step;
+    int placed = 0;
+    for (double value = first; value <= high + step * 0.5 && placed < 12; value += step) {
+        if (std::isfinite(value)) {
+            placeTick(ticks, map, view, axisCode, series, value, true, false, red, green, blue);
+            ++placed;
         }
-        const double fraction = map.fractionOf(value);
-        if (fraction < -0.001 || fraction > 1.001) {
-            continue;
-        }
-        H5PlotTick tick{};
-        tick.value = value;
-        tick.axis = axisCode;
-        tick.series = series;
-        tick.red = red;
-        tick.green = green;
-        tick.blue = blue;
-        tick.alpha = 255;
-        if (vertical) {
-            tick.x = 0.0;
-            tick.y = view.height - fraction * view.height;
-        } else {
-            tick.x = fraction * view.width;
-            tick.y = view.height;
-        }
-        ticks.push_back(tick);
     }
 }
 

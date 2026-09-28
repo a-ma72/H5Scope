@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import ctypes
+import math
 
 import numpy as np
 import shiboken6
@@ -36,6 +37,39 @@ def _label(value: float) -> str:
     if value == 0.0 or abs(value) < 1e-12:
         return "0"
     return format(value, ".6g")
+
+
+_SUP = "⁰¹²³⁴⁵⁶⁷⁸⁹"
+
+
+def _raised(exponent: int) -> str:
+    sign = "⁻" if exponent < 0 else ""
+    return sign + "".join(_SUP[int(digit)] for digit in str(abs(exponent)))
+
+
+def _log_label(value: float, base: float = 10.0) -> str:
+    """10³ at a power, 2×10³ at a numbered multiple of one."""
+    if not (value > 0.0) or not (base > 1.0):
+        return _label(value)
+    fx = math.log(value) / math.log(base)
+    decade = abs(fx - round(fx)) < 1e-10
+    exponent = int(round(fx) if decade else math.floor(fx))
+    power = "e" if abs(base - math.e) < 1e-12 else format(base, ".6g")
+    if decade:
+        return power + _raised(exponent)
+    coefficient = value / (base ** exponent)
+    if abs(coefficient - round(coefficient)) < 1e-8:
+        coefficient = int(round(coefficient))
+        lead = str(coefficient)
+    else:
+        lead = format(coefficient, ".6g")
+    return lead + "×" + power + _raised(exponent)
+
+
+def _tick_text(tick) -> str:
+    if tick.logarithmic:
+        return _log_label(tick.value)
+    return _label(tick.value)
 
 
 def _polygon(xy, first: int, count: int, scale: float) -> QPolygonF:
@@ -134,12 +168,21 @@ class PlotWidget(QWidget):
         for tick in self._ticks:
             if tick.axis == 2:
                 continue
+            # A minor on a logarithmic axis is a mark on the spine. A full
+            # rule at every multiple of a power hatches the pane.
+            minor = tick.logarithmic and not tick.labeled
             if tick.axis == 0:
                 x = left + int(round(tick.x))
-                painter.drawLine(x, top, x, top + height)
+                if minor:
+                    painter.drawLine(x, top + height - 6, x, top + height)
+                else:
+                    painter.drawLine(x, top, x, top + height)
             else:
                 y = top + int(round(tick.y))
-                painter.drawLine(left, y, left + width, y)
+                if minor:
+                    painter.drawLine(left, y, left + 6, y)
+                else:
+                    painter.drawLine(left, y, left + width, y)
         painter.setPen(QPen(ink, 1.0))
         painter.drawRect(area.adjusted(0, 0, -1, -1))
         slots = {}
@@ -147,7 +190,9 @@ class PlotWidget(QWidget):
             if tick.axis == 2 and tick.series not in slots:
                 slots[tick.series] = len(slots)
         for tick in self._ticks:
-            text = _label(tick.value)
+            if not tick.labeled:
+                continue
+            text = _tick_text(tick)
             if tick.axis == 0:
                 x = left + int(round(tick.x))
                 painter.drawText(QRect(x - 48, top + height + 2, 96, _BOTTOM - 4),
