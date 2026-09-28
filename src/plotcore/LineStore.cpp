@@ -48,16 +48,48 @@ int LineStore::addLine(const double* values, qsizetype count, const QColor& colo
     const long long base = baseBucketFor(length, kHoldDoubles);
     entry.pyramid = pyramidOf(values, length, base);
     lines_.push_back(std::move(entry));
-
-    length_ = 0;
-    for (const Entry& line : lines_) {
-        length_ = std::max(length_, static_cast<long long>(line.count));
-    }
-    cap_ = pointsFor();
-    rebuildWhole(lines_.back());
-    recount();
-    emitChanged();
+    adopt(lines_.back());
     return static_cast<int>(lines_.size()) - 1;
+}
+
+int LineStore::beginLine(long long count, const QColor& colour)
+{
+    if (count <= 0) {
+        return -1;
+    }
+    Entry entry;
+    entry.count = static_cast<qsizetype>(count);
+    entry.colour = colourAt(nextColour_++, colour);
+    entry.building = std::make_unique<PyramidBuilder>(count, baseBucketFor(count, kHoldDoubles));
+    lines_.push_back(std::move(entry));
+    return static_cast<int>(lines_.size()) - 1;
+}
+
+void LineStore::addSamples(int index, const double* values, long long count)
+{
+    if (index < 0 || index >= lineCount() || values == nullptr || count <= 0) {
+        return;
+    }
+    Entry& entry = lines_[static_cast<std::size_t>(index)];
+    if (entry.building == nullptr) {
+        return;
+    }
+    entry.building->add(values, count);
+}
+
+void LineStore::finishLine(int index)
+{
+    if (index < 0 || index >= lineCount()) {
+        return;
+    }
+    Entry& entry = lines_[static_cast<std::size_t>(index)];
+    if (entry.building == nullptr) {
+        return;
+    }
+    entry.pyramid = entry.building->finish();
+    entry.building.reset();
+    entry.count = static_cast<qsizetype>(entry.pyramid.length);
+    adopt(entry);
 }
 
 void LineStore::setOwnAxis(int index, bool on)
@@ -171,6 +203,21 @@ void LineStore::fillInto(std::vector<PlotLine>& lines, PlotAxis& axis)
 void LineStore::releaseRetired()
 {
     retired_.clear();
+}
+
+void LineStore::adopt(Entry& entry)
+{
+    length_ = 0;
+    for (const Entry& line : lines_) {
+        if (line.building != nullptr) {
+            continue;
+        }
+        length_ = std::max(length_, static_cast<long long>(line.count));
+    }
+    cap_ = pointsFor();
+    rebuildWhole(entry);
+    recount();
+    emitChanged();
 }
 
 int LineStore::pointsFor() const

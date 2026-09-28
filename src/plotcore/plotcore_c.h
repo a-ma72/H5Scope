@@ -54,6 +54,12 @@ H5PLOT_API void h5plot_destroy(H5Plot* plot);
 /* Borrow `n` doubles. The caller must keep the buffer alive. */
 H5PLOT_API int h5plot_add_line(H5Plot* plot, const double* y, long long n, int red, int green,
                                int blue);
+
+/* A line fed in order, one read at a time. It is not drawn until finish.
+ * The samples need not outlive add_samples. */
+H5PLOT_API int h5plot_begin_line(H5Plot* plot, long long n, int red, int green, int blue);
+H5PLOT_API void h5plot_add_samples(H5Plot* plot, int index, const double* y, long long n);
+H5PLOT_API void h5plot_finish_line(H5Plot* plot, int index);
 H5PLOT_API void h5plot_clear(H5Plot* plot);
 
 H5PLOT_API void h5plot_set_pane(H5Plot* plot, int width, int height, double pixel_ratio);

@@ -64,6 +64,10 @@ _lib.h5plot_create.restype = c_void_p
 _lib.h5plot_destroy.argtypes = [c_void_p]
 _lib.h5plot_add_line.argtypes = [c_void_p, ctypes.POINTER(c_double), c_longlong, c_int, c_int, c_int]
 _lib.h5plot_add_line.restype = c_int
+_lib.h5plot_begin_line.argtypes = [c_void_p, c_longlong, c_int, c_int, c_int]
+_lib.h5plot_begin_line.restype = c_int
+_lib.h5plot_add_samples.argtypes = [c_void_p, c_int, ctypes.POINTER(c_double), c_longlong]
+_lib.h5plot_finish_line.argtypes = [c_void_p, c_int]
 _lib.h5plot_clear.argtypes = [c_void_p]
 _lib.h5plot_set_pane.argtypes = [c_void_p, c_int, c_int, c_double]
 _lib.h5plot_set_ylog.argtypes = [c_void_p, c_int]
@@ -130,6 +134,34 @@ class Plot:
         self._keep.append(array)
         ptr = array.ctypes.data_as(POINTER(c_double))
         return int(_lib.h5plot_add_line(self._handle, ptr, array.size, colour[0], colour[1], colour[2]))
+
+    def add_hdf5(self, path, dataset: str, colour=None) -> int:
+        """Stream a 1-D numeric dataset into the pyramid, one read at a time.
+
+        The chunk is the viewer's read (`kReadRun`, 65536). It is converted
+        and folded, then dropped. The file is not held as one array.
+        """
+        import h5py
+        import numpy as np
+
+        if colour is None:
+            colour = _CYCLE[len(self._keep) % len(_CYCLE)]
+        with h5py.File(path, "r") as handle:
+            data = handle[dataset]
+            if getattr(data, "ndim", None) != 1 or not np.issubdtype(data.dtype, np.number):
+                raise ValueError(f"{dataset} is not a 1-D numeric dataset")
+            count = int(data.shape[0])
+            index = int(_lib.h5plot_begin_line(self._handle, count, colour[0], colour[1], colour[2]))
+            if index < 0:
+                raise RuntimeError("h5plot_begin_line failed")
+            self._keep.append(None)
+            step = 1 << 16
+            for start in range(0, count, step):
+                block = np.ascontiguousarray(data[start:start + step], dtype=np.float64)
+                _lib.h5plot_add_samples(self._handle, index, block.ctypes.data_as(POINTER(c_double)),
+                                        int(block.size))
+            _lib.h5plot_finish_line(self._handle, index)
+        return index
 
     def clear(self) -> None:
         _lib.h5plot_clear(self._handle)

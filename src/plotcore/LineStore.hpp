@@ -24,6 +24,7 @@
 #include "gui/PlotProjection.hpp"
 
 #include <functional>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -42,6 +43,18 @@ public:
     /// Borrow `count` doubles as one line. An invalid colour takes the next
     /// entry of a short cycle.
     int addLine(const double* values, qsizetype count, const QColor& colour = {});
+
+    /// A line that arrives in pieces, folded as each piece lands.
+    ///
+    /// `addLine` wants the whole buffer, because that is what a numpy array
+    /// already is. A dataset is not: PyramidBuilder takes each read and keeps
+    /// the pyramid, which is the copy, and the raw samples are not held. The
+    /// line is absent from the picture until `finishLine`. A closer look finer
+    /// than the pyramid's base has nothing left to read — there is no file
+    /// behind this store — and the whole-line summary is what is drawn then.
+    int beginLine(long long count, const QColor& colour = {});
+    void addSamples(int index, const double* values, long long count);
+    void finishLine(int index);
 
     void clearLines();
     void setPaneColumns(int columns);
@@ -94,11 +107,13 @@ private:
         bool closerValid = false;
         bool ownAxis = false;
         bool finite = false;
+        std::unique_ptr<PyramidBuilder> building;
         double low = 0.0;
         double high = 1.0;
     };
 
     [[nodiscard]] int pointsFor() const;
+    void adopt(Entry& entry);
     void rebuildWhole(Entry& entry);
     void refreshCloser();
     void recount();

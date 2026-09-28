@@ -162,6 +162,35 @@ int h5plot_add_line(H5Plot* plot, const double* y, long long n, int red, int gre
     return index;
 }
 
+int h5plot_begin_line(H5Plot* plot, long long n, int red, int green, int blue)
+{
+    if (plot == nullptr) {
+        return -1;
+    }
+    const int index = plot->store.beginLine(n, QColor(red, green, blue));
+    if (index >= 0) {
+        plot->poses.emplace_back();
+    }
+    return index;
+}
+
+void h5plot_add_samples(H5Plot* plot, int index, const double* y, long long n)
+{
+    if (plot != nullptr) {
+        plot->store.addSamples(index, y, n);
+    }
+}
+
+void h5plot_finish_line(H5Plot* plot, int index)
+{
+    if (plot == nullptr) {
+        return;
+    }
+    plot->store.finishLine(index);
+    plot->syncExtent();
+    plot->camera.reset();
+}
+
 void h5plot_clear(H5Plot* plot)
 {
     if (plot == nullptr) {
