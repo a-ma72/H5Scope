@@ -272,6 +272,15 @@ void h5plot_set_ylog(H5Plot* plot, int on)
     }
 }
 
+void h5plot_set_xlog(H5Plot* plot, int on)
+{
+    if (plot == nullptr) {
+        return;
+    }
+    plot->camera.setXLog(on != 0);
+    plot->store.setXLog(on != 0);
+}
+
 void h5plot_reset_view(H5Plot* plot)
 {
     if (plot != nullptr) {

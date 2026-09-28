@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
-from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from h5plot import PlotWidget
 
@@ -38,6 +38,14 @@ def main() -> int:
     plot = PlotWidget()
     log_y = QCheckBox("Log y")
     log_y.toggled.connect(plot.set_y_log)
+    log_x = QCheckBox("Log x")
+    log_x.toggled.connect(plot.set_x_log)
+    scales = QWidget()
+    scales_layout = QHBoxLayout(scales)
+    scales_layout.setContentsMargins(8, 0, 8, 0)
+    scales_layout.addWidget(log_y)
+    scales_layout.addWidget(log_x)
+    scales_layout.addStretch(1)
     hint = QLabel("Links verschiebt die Ansicht, rechts zieht ein Rechteck. "
                   "Alt oder die mittlere Taste verschiebt die Kurve unter dem Zeiger "
                   "in Y und gibt ihr eine eigene Achse. Der Zeiger liest den Wert "
@@ -46,7 +54,7 @@ def main() -> int:
     layout = QVBoxLayout(window)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.addWidget(plot, 1)
-    layout.addWidget(log_y)
+    layout.addWidget(scales)
     layout.addWidget(hint)
     plot.set_x(time)
     plot.add_line(sine)

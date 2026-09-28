@@ -84,6 +84,11 @@ public:
     void finishAxis();
     void setAxisReader(WindowReader reader, void* user);
 
+    /// Whether x is logarithmic. The fold changes with it: a window of an
+    /// octave or more is folded per column, because a bucket of elements is
+    /// not a column on that axis. Under an octave the linear fold stays.
+    void setXLog(bool on);
+
     void clearLines();
     void setPaneColumns(int columns);
     void setVisibleRange(double xMin, double xMax);
@@ -136,6 +141,10 @@ private:
         PlotWindow closerWindow;
         double closerStep = 1.0;
         bool closerValid = false;
+        std::vector<double> foldValues;
+        std::vector<double> foldXs;
+        bool foldSummarised = false;
+        bool foldValid = false;
         bool ownAxis = false;
         bool finite = false;
         std::unique_ptr<PyramidBuilder> building;
@@ -151,6 +160,10 @@ private:
     void acceptAxis();
     void rebuildWhole(Entry& entry);
     void refreshCloser();
+    void refreshLogFold();
+    void dropFolds();
+    [[nodiscard]] double timeAt(long long at) const;
+    [[nodiscard]] bool timeEdges(const LogColumns& columns, std::vector<double>& out) const;
     void refreshEntry(Entry& entry, const std::optional<PlotWindow>& wanted);
     [[nodiscard]] bool readWindow(Entry& entry, const PlotWindow& window,
                                   std::vector<double>& folded);
@@ -162,6 +175,9 @@ private:
     std::vector<Entry> lines_;
     Entry axis_;
     bool hasAxis_ = false;
+    bool xLog_ = false;
+    std::optional<LogColumns> logColumns_;
+    std::vector<double> logEdges_;
     std::vector<std::vector<double>> retired_;
     int columns_ = kDefaultColumns;
     int cap_ = kMinPoints;

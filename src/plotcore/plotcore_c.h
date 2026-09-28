@@ -80,6 +80,7 @@ H5PLOT_API void h5plot_clear(H5Plot* plot);
 
 H5PLOT_API void h5plot_set_pane(H5Plot* plot, int width, int height, double pixel_ratio);
 H5PLOT_API void h5plot_set_ylog(H5Plot* plot, int on);
+H5PLOT_API void h5plot_set_xlog(H5Plot* plot, int on);
 H5PLOT_API void h5plot_reset_view(H5Plot* plot);
 H5PLOT_API void h5plot_wheel(H5Plot* plot, double px, double py, double factor, int shift,
                              int control);

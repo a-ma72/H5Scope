@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <optional>
 
 namespace gui {
@@ -179,6 +180,7 @@ void LineStore::dropAxis()
     // old ones, so the next range is applied rather than matched.
     viewMax_ = viewMin_ - 1.0;
     asked_ = false;
+    dropFolds();
 }
 
 void LineStore::acceptAxis()
@@ -251,11 +253,24 @@ void LineStore::setAxisReader(WindowReader reader, void* user)
     axis_.readerUser = user;
 }
 
+void LineStore::setXLog(bool on)
+{
+    if (xLog_ == on) {
+        return;
+    }
+    xLog_ = on;
+    dropFolds();
+    asked_ = false;
+    emitChanged();
+}
+
 void LineStore::clearLines()
 {
     lines_.clear();
     axis_ = Entry{};
     hasAxis_ = false;
+    logColumns_.reset();
+    logEdges_.clear();
     retired_.clear();
     length_ = 0;
     minimum_ = 0.0;
@@ -371,6 +386,7 @@ void LineStore::setVisibleRange(double xMin, double xMax)
 
 void LineStore::fillInto(std::vector<PlotLine>& lines, PlotAxis& axis)
 {
+    refreshLogFold();
     lines.clear();
     lines.reserve(lines_.size());
     for (const Entry& entry : lines_) {
@@ -588,10 +604,141 @@ void LineStore::recount()
     }
 }
 
+void LineStore::dropFolds()
+{
+    for (Entry& entry : lines_) {
+        if (!entry.foldValues.empty()) {
+            retired_.push_back(std::move(entry.foldValues));
+        }
+        if (!entry.foldXs.empty()) {
+            retired_.push_back(std::move(entry.foldXs));
+        }
+        entry.foldValid = false;
+        entry.foldSummarised = false;
+    }
+    logColumns_.reset();
+    logEdges_.clear();
+}
+
+double LineStore::timeAt(long long at) const
+{
+    const LinePyramid& time = axis_.pyramid;
+    if (time.empty() || at < 0 || at >= time.length) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    const PyramidLevel& bottom = time.levels.front();
+    if (bottom.bucket == 1) {
+        return bottom.values[static_cast<std::size_t>(at)];
+    }
+    // The pair's first value is the bucket's first element. On a time base
+    // that only goes one way, that is the edge a bisection needs.
+    return bottom.values[static_cast<std::size_t>(at / bottom.bucket) * 2];
+}
+
+bool LineStore::timeEdges(const LogColumns& columns, std::vector<double>& out) const
+{
+    out.clear();
+    if (axis_.pyramid.empty() || columns.density <= 0) {
+        return false;
+    }
+    const std::vector<double>& bottom = axis_.pyramid.levels.front().values;
+    const bool ascending = std::is_sorted(bottom.begin(), bottom.end());
+    const bool descending = !ascending && std::is_sorted(bottom.rbegin(), bottom.rend());
+    if (!ascending && !descending) {
+        return false;
+    }
+    const long long length = axis_.pyramid.length;
+    const auto before = [&](double x) {
+        long long low = 0;
+        long long high = length;
+        while (low < high) {
+            const long long mid = low + (high - low) / 2;
+            const double t = timeAt(mid);
+            if (ascending ? t < x : t >= x) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        return low;
+    };
+    out.reserve(static_cast<std::size_t>(columns.last - columns.first + 1));
+    for (long long k = columns.first; k <= columns.last; ++k) {
+        out.push_back(static_cast<double>(before(columns.edge(k))));
+    }
+    if (descending) {
+        std::reverse(out.begin(), out.end());
+    }
+    return out.size() >= 2;
+}
+
+void LineStore::refreshLogFold()
+{
+    if (!xLog_ || !asked_) {
+        if (logColumns_.has_value()) {
+            dropFolds();
+        }
+        return;
+    }
+    // An octave or more, or the linear fold. logColumnsFor is that decision.
+    const std::optional<LogColumns> wanted = logColumnsFor(askedMin_, askedMax_, columns_);
+    if (!wanted.has_value()) {
+        if (logColumns_.has_value()) {
+            dropFolds();
+        }
+        return;
+    }
+    const bool same = logColumns_.has_value() &&
+                      logColumnsServe(*logColumns_, askedMin_, askedMax_, columns_);
+    if (!same) {
+        dropFolds();
+        std::vector<double> edges;
+        if (hasAxis_) {
+            if (!timeEdges(*wanted, edges)) {
+                return;
+            }
+        } else {
+            edgesAlong(*wanted, 0.0, 1.0, edges);
+        }
+        if (edges.size() < 2) {
+            return;
+        }
+        logColumns_ = *wanted;
+        logEdges_ = std::move(edges);
+    }
+    if (!logColumns_.has_value() || logEdges_.size() < 2) {
+        return;
+    }
+    for (Entry& entry : lines_) {
+        if (entry.foldValid || entry.pyramid.empty()) {
+            continue;
+        }
+        ColumnFold folded;
+        foldColumns(entry.pyramid, logEdges_, folded);
+        std::vector<double> xs(folded.positions.size());
+        for (std::size_t i = 0; i < xs.size(); ++i) {
+            const double at = folded.positions[i];
+            xs[i] = hasAxis_ ? timeAt(std::llround(at)) : at;
+        }
+        entry.foldValues = std::move(folded.values);
+        entry.foldXs = std::move(xs);
+        entry.foldSummarised = folded.summarised;
+        entry.foldValid = true;
+    }
+}
+
 PlotLine LineStore::lineOf(const Entry& entry) const
 {
     PlotLine line;
     line.colour = entry.colour;
+    if (entry.foldValid && !entry.foldValues.empty() &&
+        entry.foldValues.size() == entry.foldXs.size()) {
+        line.values = entry.foldValues.data();
+        line.xs = entry.foldXs.data();
+        line.count = static_cast<qsizetype>(entry.foldValues.size());
+        line.summarised = entry.foldSummarised;
+        return line;
+    }
     if (entry.closerValid && !entry.closer.empty()) {
         line.values = entry.closer.data();
         line.count = static_cast<qsizetype>(entry.closer.size());

@@ -111,6 +111,10 @@ class PlotWidget(QWidget):
         self._plot.set_y_log(on)
         self._reproject()
 
+    def set_x_log(self, on: bool):
+        self._plot.set_x_log(on)
+        self._reproject()
+
     def _reproject(self):
         _left, _top, width, height = self._pane()
         ratio = float(self.devicePixelRatioF())

@@ -92,6 +92,7 @@ _lib.h5plot_set_axis_reader.argtypes = [c_void_p, _READ, c_void_p]
 _lib.h5plot_clear.argtypes = [c_void_p]
 _lib.h5plot_set_pane.argtypes = [c_void_p, c_int, c_int, c_double]
 _lib.h5plot_set_ylog.argtypes = [c_void_p, c_int]
+_lib.h5plot_set_xlog.argtypes = [c_void_p, c_int]
 _lib.h5plot_reset_view.argtypes = [c_void_p]
 _lib.h5plot_wheel.argtypes = [c_void_p, c_double, c_double, c_double, c_int, c_int]
 _lib.h5plot_pan.argtypes = [c_void_p, c_double, c_double]
@@ -294,6 +295,9 @@ class Plot:
 
     def set_y_log(self, on: bool) -> None:
         _lib.h5plot_set_ylog(self._handle, 1 if on else 0)
+
+    def set_x_log(self, on: bool) -> None:
+        _lib.h5plot_set_xlog(self._handle, 1 if on else 0)
 
     def reset_view(self) -> None:
         _lib.h5plot_reset_view(self._handle)
