@@ -191,6 +191,13 @@ void h5plot_finish_line(H5Plot* plot, int index)
     plot->camera.reset();
 }
 
+void h5plot_set_reader(H5Plot* plot, int index, H5PlotRead read, void* user)
+{
+    if (plot != nullptr) {
+        plot->store.setWindowReader(index, read, user);
+    }
+}
+
 void h5plot_clear(H5Plot* plot)
 {
     if (plot == nullptr) {

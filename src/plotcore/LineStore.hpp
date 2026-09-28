@@ -50,11 +50,20 @@ public:
     /// already is. A dataset is not: PyramidBuilder takes each read and keeps
     /// the pyramid, which is the copy, and the raw samples are not held. The
     /// line is absent from the picture until `finishLine`. A closer look finer
-    /// than the pyramid's base has nothing left to read — there is no file
-    /// behind this store — and the whole-line summary is what is drawn then.
+    /// than the pyramid's base asks `setWindowReader`, and without one the
+    /// whole-line summary stays up.
     int beginLine(long long count, const QColor& colour = {});
     void addSamples(int index, const double* values, long long count);
     void finishLine(int index);
+
+    /// Where a closer look finer than the pyramid's base is read from.
+    ///
+    /// Writes `count` doubles into `out`, the elements of the line from
+    /// `first`. Returns 0 when it cannot. Called on the thread that asked for
+    /// the picture, and only for a window the pyramid does not hold. A line
+    /// borrowed from memory needs none of this: that buffer is read directly.
+    using WindowReader = int (*)(void* user, long long first, long long count, double* out);
+    void setWindowReader(int index, WindowReader reader, void* user);
 
     void clearLines();
     void setPaneColumns(int columns);
@@ -108,6 +117,8 @@ private:
         bool ownAxis = false;
         bool finite = false;
         std::unique_ptr<PyramidBuilder> building;
+        WindowReader reader = nullptr;
+        void* readerUser = nullptr;
         double low = 0.0;
         double high = 1.0;
     };
@@ -116,6 +127,8 @@ private:
     void adopt(Entry& entry);
     void rebuildWhole(Entry& entry);
     void refreshCloser();
+    [[nodiscard]] bool readWindow(Entry& entry, const PlotWindow& window,
+                                  std::vector<double>& folded);
     void recount();
     [[nodiscard]] PlotLine lineOf(const Entry& entry) const;
     void emitChanged();

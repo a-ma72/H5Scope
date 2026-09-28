@@ -60,6 +60,11 @@ H5PLOT_API int h5plot_add_line(H5Plot* plot, const double* y, long long n, int r
 H5PLOT_API int h5plot_begin_line(H5Plot* plot, long long n, int red, int green, int blue);
 H5PLOT_API void h5plot_add_samples(H5Plot* plot, int index, const double* y, long long n);
 H5PLOT_API void h5plot_finish_line(H5Plot* plot, int index);
+
+/* Called when a closer look is finer than the pyramid. Writes `count`
+ * doubles at `out`, the line's elements from `first`. Returns 0 to refuse. */
+typedef int (*H5PlotRead)(void* user, long long first, long long count, double* out);
+H5PLOT_API void h5plot_set_reader(H5Plot* plot, int index, H5PlotRead read, void* user);
 H5PLOT_API void h5plot_clear(H5Plot* plot);
 
 H5PLOT_API void h5plot_set_pane(H5Plot* plot, int width, int height, double pixel_ratio);

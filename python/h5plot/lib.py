@@ -68,6 +68,8 @@ _lib.h5plot_begin_line.argtypes = [c_void_p, c_longlong, c_int, c_int, c_int]
 _lib.h5plot_begin_line.restype = c_int
 _lib.h5plot_add_samples.argtypes = [c_void_p, c_int, ctypes.POINTER(c_double), c_longlong]
 _lib.h5plot_finish_line.argtypes = [c_void_p, c_int]
+_READ = ctypes.CFUNCTYPE(c_int, c_void_p, c_longlong, c_longlong, POINTER(c_double))
+_lib.h5plot_set_reader.argtypes = [c_void_p, c_int, _READ, c_void_p]
 _lib.h5plot_clear.argtypes = [c_void_p]
 _lib.h5plot_set_pane.argtypes = [c_void_p, c_int, c_int, c_double]
 _lib.h5plot_set_ylog.argtypes = [c_void_p, c_int]
@@ -115,11 +117,18 @@ class Plot:
         if not self._handle:
             raise RuntimeError("h5plot_create failed")
         self._keep: list = []
+        self._sources: dict = {}
+        self._tokens: dict = {}
+        self._read_cb = _READ(self._read_window)
 
     def close(self) -> None:
         if self._handle:
             _lib.h5plot_destroy(self._handle)
             self._handle = None
+        for handle, _data in self._sources.values():
+            handle.close()
+        self._sources.clear()
+        self._tokens.clear()
         self._keep.clear()
 
     def __del__(self) -> None:
@@ -139,14 +148,16 @@ class Plot:
         """Stream a 1-D numeric dataset into the pyramid, one read at a time.
 
         The chunk is the viewer's read (`kReadRun`, 65536). It is converted
-        and folded, then dropped. The file is not held as one array.
+        and folded, then dropped. The file stays open: a closer look finer
+        than the pyramid's base reads that window back from it.
         """
         import h5py
         import numpy as np
 
         if colour is None:
             colour = _CYCLE[len(self._keep) % len(_CYCLE)]
-        with h5py.File(path, "r") as handle:
+        handle = h5py.File(path, "r")
+        try:
             data = handle[dataset]
             if getattr(data, "ndim", None) != 1 or not np.issubdtype(data.dtype, np.number):
                 raise ValueError(f"{dataset} is not a 1-D numeric dataset")
@@ -161,10 +172,37 @@ class Plot:
                 _lib.h5plot_add_samples(self._handle, index, block.ctypes.data_as(POINTER(c_double)),
                                         int(block.size))
             _lib.h5plot_finish_line(self._handle, index)
+        except Exception:
+            handle.close()
+            raise
+        self._sources[index] = (handle, data)
+        token = (self, index)
+        self._tokens[index] = token
+        # id() is the PyObject*. The token stays in _tokens, which is the
+        # reference that keeps that pointer live for the callback.
+        _lib.h5plot_set_reader(self._handle, index, self._read_cb, c_void_p(id(token)))
         return index
+
+    def _read_window(self, user, first: int, count: int, out) -> int:
+        import numpy as np
+
+        try:
+            _plot, index = ctypes.cast(user, ctypes.py_object).value
+            _handle, data = self._sources[index]
+            block = np.ascontiguousarray(data[int(first):int(first) + int(count)], dtype=np.float64)
+            if block.size != int(count):
+                return 0
+            ctypes.memmove(out, int(block.ctypes.data), int(count) * 8)
+            return 1
+        except Exception:
+            return 0
 
     def clear(self) -> None:
         _lib.h5plot_clear(self._handle)
+        for handle, _data in self._sources.values():
+            handle.close()
+        self._sources.clear()
+        self._tokens.clear()
         self._keep.clear()
 
     def set_pane(self, width: int, height: int, pixel_ratio: float = 1.0) -> None:

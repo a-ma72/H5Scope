@@ -92,6 +92,16 @@ void LineStore::finishLine(int index)
     adopt(entry);
 }
 
+void LineStore::setWindowReader(int index, WindowReader reader, void* user)
+{
+    if (index < 0 || index >= lineCount()) {
+        return;
+    }
+    Entry& entry = lines_[static_cast<std::size_t>(index)];
+    entry.reader = reader;
+    entry.readerUser = user;
+}
+
 void LineStore::setOwnAxis(int index, bool on)
 {
     if (index < 0 || index >= lineCount()) {
@@ -261,7 +271,10 @@ void LineStore::refreshCloser()
             continue;
         }
         std::vector<double> folded;
-        if (!fillWindow(entry.pyramid, *wanted, folded)) {
+        // The pyramid answers every window at or above its base. Below that
+        // the samples are not in memory, and only the reader — the file —
+        // still has them. Without one, the whole-line summary stays up.
+        if (!fillWindow(entry.pyramid, *wanted, folded) && !readWindow(entry, *wanted, folded)) {
             if (entry.closerValid) {
                 retired_.push_back(std::move(entry.closer));
                 entry.closerValid = false;
@@ -276,6 +289,35 @@ void LineStore::refreshCloser()
         entry.closerStep = wanted->bucket == 1 ? 1.0 : static_cast<double>(wanted->bucket) / 2.0;
         entry.closerValid = true;
     }
+}
+
+bool LineStore::readWindow(Entry& entry, const PlotWindow& window, std::vector<double>& folded)
+{
+    if (window.span <= 0 || window.first < 0) {
+        return false;
+    }
+    const long long end = window.first + window.span;
+    std::vector<double> raw;
+    if (entry.values != nullptr && end <= static_cast<long long>(entry.count)) {
+        // The borrowed buffer is the line. It is what a closer look reads
+        // once the pyramid's base is coarser than the window.
+        const double* from = entry.values + window.first;
+        raw.assign(from, from + window.span);
+    } else if (entry.reader != nullptr) {
+        raw.resize(static_cast<std::size_t>(window.span));
+        if (entry.reader(entry.readerUser, window.first, window.span, raw.data()) == 0) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    if (window.bucket <= 1) {
+        folded = std::move(raw);
+        return true;
+    }
+    folded.clear();
+    reduceBuckets(raw.data(), window.span, window.bucket, folded);
+    return !folded.empty();
 }
 
 void LineStore::recount()
