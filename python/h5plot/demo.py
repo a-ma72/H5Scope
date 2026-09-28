@@ -58,6 +58,7 @@ def main() -> int:
     layout.addWidget(scales)
     layout.addWidget(hint)
     plot.set_x(time)
+    plot.set_x_label("s")
     plot.add_line(sine, name="sine")
     plot.add_line(cosine, name="cosine")
     plot.add_line(slow, name="slow")

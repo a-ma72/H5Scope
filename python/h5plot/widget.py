@@ -205,6 +205,8 @@ class PlotWidget(QWidget):
         self._reading = None
         self._legend_tips = []
         self._legend_rect = None
+        self._x_label = ""
+        self._y_label = ""
         self._stroke = QImage()
         self.setMinimumSize(240, 160)
         self.setMouseTracking(True)
@@ -216,11 +218,19 @@ class PlotWidget(QWidget):
         common = 0 if lines > 0 and own >= lines else 1
         return own, common
 
+    def _name_extent(self) -> int:
+        return QFontMetrics(self.font()).height() + 4
+
     def _pane(self) -> tuple[int, int, int, int]:
         own, common = self._columns()
+        # The name is outermost: under the numbers along x, and to the left of
+        # every y column. It is only there when there is a name to write.
         left = _OWN_COLUMN * (own + common)
+        if self._y_label and common:
+            left += self._name_extent()
+        bottom = _BOTTOM + (self._name_extent() if self._x_label else 0)
         width = max(1, self.width() - left - _RIGHT)
-        height = max(1, self.height() - _TOP - _BOTTOM)
+        height = max(1, self.height() - _TOP - bottom)
         return left, _TOP, width, height
 
     def set_x(self, x):
@@ -249,6 +259,14 @@ class PlotWidget(QWidget):
 
     def set_x_log(self, on: bool):
         self._plot.set_x_log(on)
+        self._reproject()
+
+    def set_x_label(self, text: str):
+        self._x_label = str(text).strip() if text else ""
+        self._reproject()
+
+    def set_y_label(self, text: str):
+        self._y_label = str(text).strip() if text else ""
         self._reproject()
 
     def _reproject(self):
@@ -313,6 +331,7 @@ class PlotWidget(QWidget):
         if self._xy is not None and len(self._runs) != 0:
             painter.drawImage(QRect(left, top, width, height), self._curves(width, height))
         self._paint_legend(painter, left, top, width, height, ink)
+        self._paint_axis_names(painter, left, top, width, height, ink)
         if self._band is not None:
             start, end = self._band
             band = QRect(int(min(start.x(), end.x())), int(min(start.y(), end.y())),
@@ -394,6 +413,36 @@ class PlotWidget(QWidget):
             painter.drawText(QRect(box_x + pad, y, box_w - pad * 2, row_h),
                              Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                              f"+{extra} more")
+
+    def _paint_axis_names(self, painter: QPainter, left: int, top: int, width: int, height: int,
+                           ink: QColor) -> None:
+        # Under the numbers, and up the side outside every y column. A name
+        # that does not fit keeps the part that does and shows the rest when
+        # the pointer is on it. The common y name is absent once every line
+        # has left that axis: there is no column left for it to name.
+        metrics = QFontMetrics(painter.font())
+        extent = metrics.height() + 4
+        _own, common = self._columns()
+        if self._x_label and width > 0:
+            shown = metrics.elidedText(self._x_label, Qt.TextElideMode.ElideRight, width)
+            rect = QRect(left, top + height + _BOTTOM, width, extent)
+            painter.setPen(ink)
+            painter.drawText(rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+                             shown)
+            if shown != self._x_label:
+                self._legend_tips.append((rect, self._x_label))
+        if self._y_label and common and height > 0:
+            shown = metrics.elidedText(self._y_label, Qt.TextElideMode.ElideRight, height)
+            band = QRect(left - extent, top, extent, height)
+            painter.save()
+            painter.translate(band.center())
+            painter.rotate(-90)
+            painter.setPen(ink)
+            painter.drawText(QRect(-height // 2, -extent // 2, height, extent),
+                             Qt.AlignmentFlag.AlignCenter, shown)
+            painter.restore()
+            if shown != self._y_label:
+                self._legend_tips.append((band, self._y_label))
 
     def _paint_band_readout(self, painter: QPainter, left: int, top: int, width: int,
                              height: int, ink: QColor) -> None:
