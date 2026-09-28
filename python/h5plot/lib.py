@@ -145,6 +145,8 @@ class Plot:
         if not self._handle:
             raise RuntimeError("h5plot_create failed")
         self._keep: list = []
+        self._names: list = []
+        self._colours: list = []
         self._x = None
         self._sources: dict = {}
         self._tokens: dict = {}
@@ -159,18 +161,21 @@ class Plot:
         self._sources.clear()
         self._tokens.clear()
         self._keep.clear()
+        self._names.clear()
+        self._colours.clear()
         self._x = None
 
     def __del__(self) -> None:
         self.close()
 
-    def add_line(self, y, colour=None) -> int:
+    def add_line(self, y, colour=None, name=None) -> int:
         import numpy as np
 
         if colour is None:
             colour = _CYCLE[len(self._keep) % len(_CYCLE)]
         array = np.ascontiguousarray(y, dtype=np.float64)
         self._keep.append(array)
+        self._remember(name, colour)
         ptr = array.ctypes.data_as(POINTER(c_double))
         return int(_lib.h5plot_add_line(self._handle, ptr, array.size, colour[0], colour[1], colour[2]))
 
@@ -234,7 +239,7 @@ class Plot:
         if held is not None:
             held[0].close()
 
-    def add_hdf5(self, path, dataset: str, colour=None) -> int:
+    def add_hdf5(self, path, dataset: str, colour=None, name=None) -> int:
         """Stream a 1-D numeric dataset into the pyramid, one read at a time.
 
         The chunk is the viewer's read (`kReadRun`, 65536). It is converted
@@ -256,6 +261,7 @@ class Plot:
             if index < 0:
                 raise RuntimeError("h5plot_begin_line failed")
             self._keep.append(None)
+            self._remember(name, colour)
             step = 1 << 16
             for start in range(0, count, step):
                 block = np.ascontiguousarray(data[start:start + step], dtype=np.float64)
@@ -294,7 +300,27 @@ class Plot:
         self._sources.clear()
         self._tokens.clear()
         self._keep.clear()
+        self._names.clear()
+        self._colours.clear()
         self._x = None
+
+    def line_name(self, index: int):
+        if index < 0 or index >= len(self._names):
+            return None
+        return self._names[index]
+
+    def named_lines(self):
+        """Lines that have a name, in the order they were added, with the colour they were drawn in."""
+        return [
+            (index, self._names[index], self._colours[index])
+            for index in range(len(self._names))
+            if self._names[index]
+        ]
+
+    def _remember(self, name, colour) -> None:
+        text = str(name).strip() if name else ""
+        self._names.append(text or None)
+        self._colours.append((int(colour[0]), int(colour[1]), int(colour[2])))
 
     def set_pane(self, width: int, height: int, pixel_ratio: float = 1.0) -> None:
         _lib.h5plot_set_pane(self._handle, int(width), int(height), float(pixel_ratio))

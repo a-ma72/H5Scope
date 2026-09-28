@@ -58,9 +58,9 @@ def main() -> int:
     layout.addWidget(scales)
     layout.addWidget(hint)
     plot.set_x(time)
-    plot.add_line(sine)
-    plot.add_line(cosine)
-    plot.add_line(slow)
+    plot.add_line(sine, name="sine")
+    plot.add_line(cosine, name="cosine")
+    plot.add_line(slow, name="slow")
     window.show()
     return app.exec()
 

@@ -23,7 +23,7 @@ from PySide6.QtGui import (
     QResizeEvent,
     QWheelEvent,
 )
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QToolTip, QWidget
 
 from .lib import Plot
 
@@ -203,6 +203,8 @@ class PlotWidget(QWidget):
         self._band = None
         self._shift = None
         self._reading = None
+        self._legend_tips = []
+        self._legend_rect = None
         self._stroke = QImage()
         self.setMinimumSize(240, 160)
         self.setMouseTracking(True)
@@ -231,13 +233,13 @@ class PlotWidget(QWidget):
         self._plot.reset_view()
         self._reproject()
 
-    def add_line(self, y, colour=None):
-        self._plot.add_line(y, colour)
+    def add_line(self, y, colour=None, name=None):
+        self._plot.add_line(y, colour, name)
         self._plot.reset_view()
         self._reproject()
 
-    def add_hdf5(self, path, dataset: str, colour=None):
-        self._plot.add_hdf5(path, dataset, colour)
+    def add_hdf5(self, path, dataset: str, colour=None, name=None):
+        self._plot.add_hdf5(path, dataset, colour, name)
         self._plot.reset_view()
         self._reproject()
 
@@ -310,6 +312,7 @@ class PlotWidget(QWidget):
                 painter.setPen(QPen(ink, 1.0))
         if self._xy is not None and len(self._runs) != 0:
             painter.drawImage(QRect(left, top, width, height), self._curves(width, height))
+        self._paint_legend(painter, left, top, width, height, ink)
         if self._band is not None:
             start, end = self._band
             band = QRect(int(min(start.x(), end.x())), int(min(start.y(), end.y())),
@@ -329,9 +332,68 @@ class PlotWidget(QWidget):
             painter.drawLine(int(round(hx)) - 4, int(round(hy)), int(round(hx)) + 4, int(round(hy)))
             painter.drawLine(int(round(hx)), int(round(hy)) - 4, int(round(hx)), int(round(hy)) + 4)
             painter.setPen(ink)
-            painter.drawText(QRect(left + 8, top + 4, width - 16, 18),
+            name = self._plot.line_name(reading.line)
+            parts = [_label(reading.x), _label(reading.y)]
+            if name and self._plot.line_count() > 1:
+                parts.insert(0, name)
+            read_right = left + width - 8
+            if self._legend_rect is not None:
+                read_right = min(read_right, self._legend_rect.left() - 8)
+            painter.drawText(QRect(left + 8, top + 4, max(1, read_right - left - 8), 18),
                              Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                             f"{_label(reading.x)}    {_label(reading.y)}")
+                             "    ".join(parts))
+
+    def _paint_legend(self, painter: QPainter, left: int, top: int, width: int, height: int,
+                       ink: QColor) -> None:
+        # A caption on the picture, not a control. The swatch is the colour the
+        # line was drawn in. Past twelve names it says how many are left,
+        # because a list that silently stopped would be wrong about the picture.
+        named = self._plot.named_lines()
+        self._legend_tips = []
+        self._legend_rect = None
+        if not named or width <= 0 or height <= 0:
+            return
+        shown = named[:12]
+        extra = len(named) - len(shown)
+        metrics = QFontMetrics(painter.font())
+        swatch = 14
+        gap = 6
+        pad = 8
+        row_h = metrics.height() + 2
+        labels = [name for _index, name, _colour in shown]
+        if extra:
+            labels.append(f"+{extra} more")
+        longest = max(metrics.horizontalAdvance(text) for text in labels)
+        box_w = min(pad * 2 + swatch + gap + longest, max(1, width // 2))
+        text_w = max(1, box_w - pad * 2 - swatch - gap)
+        rows = len(shown) + (1 if extra else 0)
+        box_h = pad * 2 + rows * row_h
+        box_x = left + width - box_w - 8
+        box_y = top + 8
+        if box_x < left:
+            box_x = left
+        self._legend_rect = QRect(box_x, box_y, box_w, box_h)
+        painter.fillRect(QRect(box_x, box_y, box_w, box_h), QColor(16, 16, 16, 230))
+        painter.setPen(QPen(QColor(70, 70, 70), 1.0))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(QRect(box_x, box_y, box_w, box_h).adjusted(0, 0, -1, -1))
+        for row, (index, name, colour) in enumerate(shown):
+            y = box_y + pad + row * row_h
+            painter.fillRect(QRect(box_x + pad, y + (row_h - 8) // 2, swatch, 8),
+                             QColor(*colour))
+            shown_text = metrics.elidedText(name, Qt.TextElideMode.ElideMiddle, text_w)
+            painter.setPen(ink)
+            text_rect = QRect(box_x + pad + swatch + gap, y, text_w, row_h)
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                             shown_text)
+            if shown_text != name:
+                self._legend_tips.append((text_rect, name))
+        if extra:
+            y = box_y + pad + len(shown) * row_h
+            painter.setPen(QColor(140, 140, 140))
+            painter.drawText(QRect(box_x + pad, y, box_w - pad * 2, row_h),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                             f"+{extra} more")
 
     def _paint_band_readout(self, painter: QPainter, left: int, top: int, width: int,
                              height: int, ink: QColor) -> None:
@@ -496,8 +558,17 @@ class PlotWidget(QWidget):
         self._reading = self._plot.sample(px, py)
         self.update()
 
+    def _legend_tip(self, event: QMouseEvent) -> None:
+        pos = event.position().toPoint()
+        for rect, name in self._legend_tips:
+            if rect.contains(pos):
+                QToolTip.showText(event.globalPosition().toPoint(), name, self)
+                return
+        QToolTip.hideText()
+
     def leaveEvent(self, event):
         self._reading = None
+        QToolTip.hideText()
         self.update()
         super().leaveEvent(event)
 
@@ -515,6 +586,7 @@ class PlotWidget(QWidget):
             return
         if self._drag is None:
             self._read(event.position())
+            self._legend_tip(event)
             return
         self._reading = None
         pos = event.position()
