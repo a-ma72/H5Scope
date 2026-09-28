@@ -122,6 +122,10 @@ _lib.h5plot_view_min_y.argtypes = [c_void_p]
 _lib.h5plot_view_min_y.restype = c_double
 _lib.h5plot_view_max_y.argtypes = [c_void_p]
 _lib.h5plot_view_max_y.restype = c_double
+_lib.h5plot_data_x_at.argtypes = [c_void_p, c_double]
+_lib.h5plot_data_x_at.restype = c_double
+_lib.h5plot_data_y_at.argtypes = [c_void_p, c_double]
+_lib.h5plot_data_y_at.restype = c_double
 _lib.h5plot_project.argtypes = [c_void_p]
 _lib.h5plot_project.restype = c_int
 _lib.h5plot_point_count.argtypes = [c_void_p]
@@ -356,6 +360,12 @@ class Plot:
 
     def view_max_y(self) -> float:
         return float(_lib.h5plot_view_max_y(self._handle))
+
+    def data_x_at(self, px: float) -> float:
+        return float(_lib.h5plot_data_x_at(self._handle, px))
+
+    def data_y_at(self, py: float) -> float:
+        return float(_lib.h5plot_data_y_at(self._handle, py))
 
     def project(self):
         n = int(_lib.h5plot_project(self._handle))

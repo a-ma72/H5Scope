@@ -82,6 +82,11 @@ public:
     [[nodiscard]] Span paddedX() const;
     [[nodiscard]] Span paddedY() const;
 
+    /// The data value under a pane-local pixel. zoomToRegion resolves a band
+    /// through these, so a readout of that band has to ask them too.
+    [[nodiscard]] double dataXAt(double px, double areaWidth) const;
+    [[nodiscard]] double dataYAt(double py, double areaHeight) const;
+
 private:
     [[nodiscard]] static Span padded(double low, double high, bool logarithmic, double base);
     [[nodiscard]] double axisPosition(double value, bool logarithmic, double base) const;
@@ -93,8 +98,6 @@ private:
     void setViewRange(double x0, double x1, double y0, double y1);
     [[nodiscard]] double valueAlong(double low, double high, double at, bool logarithmic,
                                     double base) const;
-    [[nodiscard]] double dataXAt(double px, double areaWidth) const;
-    [[nodiscard]] double dataYAt(double py, double areaHeight) const;
     [[nodiscard]] double maxZoom() const;
     [[nodiscard]] double minimumSpanX() const;
     [[nodiscard]] double logZoomCeiling(double full, double held, double fraction,

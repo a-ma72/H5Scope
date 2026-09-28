@@ -133,6 +133,12 @@ H5PLOT_API double h5plot_view_max_x(const H5Plot* plot);
 H5PLOT_API double h5plot_view_min_y(const H5Plot* plot);
 H5PLOT_API double h5plot_view_max_y(const H5Plot* plot);
 
+/* The data value under a pane-local pixel. The same two questions a rectangle
+ * zoom resolves its corners with, so a readout of the band and the window it
+ * opens are one statement. y grows downward. */
+H5PLOT_API double h5plot_data_x_at(const H5Plot* plot, double px);
+H5PLOT_API double h5plot_data_y_at(const H5Plot* plot, double py);
+
 /* Fold + project. Returns the number of points. */
 H5PLOT_API int h5plot_project(H5Plot* plot);
 H5PLOT_API int h5plot_point_count(const H5Plot* plot);

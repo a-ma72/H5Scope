@@ -652,6 +652,22 @@ double h5plot_view_max_y(const H5Plot* plot)
     return plot != nullptr ? plot->camera.viewMaxY() : 1.0;
 }
 
+double h5plot_data_x_at(const H5Plot* plot, double px)
+{
+    if (plot == nullptr) {
+        return 0.0;
+    }
+    return plot->camera.dataXAt(px, static_cast<double>(plot->width));
+}
+
+double h5plot_data_y_at(const H5Plot* plot, double py)
+{
+    if (plot == nullptr) {
+        return 0.0;
+    }
+    return plot->camera.dataYAt(py, static_cast<double>(plot->height));
+}
+
 int h5plot_project(H5Plot* plot)
 {
     if (plot == nullptr) {

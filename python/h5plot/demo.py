@@ -46,7 +46,8 @@ def main() -> int:
     scales_layout.addWidget(log_y)
     scales_layout.addWidget(log_x)
     scales_layout.addStretch(1)
-    hint = QLabel("Links verschiebt die Ansicht, rechts zieht ein Rechteck. "
+    hint = QLabel("Links verschiebt die Ansicht, rechts zieht ein Rechteck "
+                  "und nennt den Bereich, den es öffnet. "
                   "Alt oder die mittlere Taste verschiebt die Kurve unter dem Zeiger "
                   "in Y und gibt ihr eine eigene Achse. Der Zeiger liest den Wert "
                   "der nächsten Kurve.")

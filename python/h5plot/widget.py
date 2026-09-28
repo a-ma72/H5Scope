@@ -13,6 +13,7 @@ import shiboken6
 from PySide6.QtCore import Qt, QRect
 from PySide6.QtGui import (
     QColor,
+    QFontMetrics,
     QImage,
     QMouseEvent,
     QPaintEvent,
@@ -70,6 +71,105 @@ def _tick_text(tick) -> str:
     if tick.logarithmic:
         return _log_label(tick.value)
     return _label(tick.value)
+
+
+def _trimmed(text: str) -> str:
+    """Drop trailing zeros, and the point with them. An exponent keeps its part."""
+    at = text.find("e")
+    mantissa = text if at < 0 else text[:at]
+    if "." not in mantissa:
+        return text
+    mantissa = mantissa.rstrip("0").rstrip(".")
+    if at < 0:
+        return mantissa
+    exponent = text[at + 1 :]
+    sign = ""
+    if exponent[:1] in "+-":
+        sign = exponent[0]
+        exponent = exponent[1:]
+    return mantissa + "e" + sign + (exponent.lstrip("0") or "0")
+
+
+def _label_for(value: float, span: float) -> str:
+    """A linear tick: enough figures to tell it from the next, judged by the span."""
+    width = abs(span)
+    if width >= 1e6 or (0.0 < width < 1e-4):
+        if value == 0.0:
+            return "0"
+        figures = 1
+        if value != 0.0 and width > 0.0:
+            figures = math.ceil(math.log10(abs(value) / width)) + 2
+        figures = max(1, min(15, figures))
+        return _trimmed(format(value, f".{figures}e"))
+    places = 0
+    if width > 0.0:
+        places = max(0, min(6, math.ceil(-math.log10(width)) + 2))
+    return _trimmed(format(value, f".{places}f"))
+
+
+def _log_label_for(value: float) -> str:
+    """A value between logarithmic ticks: three figures, zeros taken off."""
+    if not (value > 0.0) or not math.isfinite(value):
+        return _label(value)
+    exponent = math.floor(math.log10(value))
+    if exponent >= 6 or exponent < -4:
+        return _trimmed(format(value, ".2e"))
+    places = max(0, min(8, 2 - exponent))
+    return _trimmed(format(value, f".{places}f"))
+
+
+def _axis_number(value: float, low: float, high: float, logarithmic: bool) -> str:
+    if logarithmic:
+        return _log_label_for(value)
+    return _label_for(value, high - low)
+
+
+# The air a band's number keeps from the rectangle, the pane's edge and the
+# pointer. One distance, because they are one rule.
+_CLEAR = 6
+_POINTER = 16
+
+
+def _clears(a, b) -> bool:
+    return (a[0] + a[2] + _CLEAR <= b[0] or b[0] + b[2] + _CLEAR <= a[0]
+            or a[1] + a[3] + _CLEAR <= b[1] or b[1] + b[3] + _CLEAR <= a[1])
+
+
+def _inside(box, pane_w: float, pane_h: float) -> bool:
+    return (box[0] >= 0 and box[1] >= 0
+            and box[0] + box[2] <= pane_w and box[1] + box[3] <= pane_h)
+
+
+def _place_corner(cx, cy, away_x, away_y, tw, th, pane_w, pane_h, avoid):
+    """Push a corner's number off the band, and off the pointer when that is where it would land."""
+    out_x = _POINTER + _CLEAR if away_x > 0 and away_y > 0 else _CLEAR
+    want_x = cx - _CLEAR - tw if away_x < 0 else cx + out_x
+    want_y = cy - _CLEAR - th if away_y < 0 else cy + _CLEAR
+    back_x = cx + _CLEAR if away_x < 0 else cx - _CLEAR - tw
+    back_y = cy + _CLEAR if away_y < 0 else cy - _CLEAR - th
+
+    def clamp(value, size, extent):
+        return max(0.0, min(extent - size, value))
+
+    def at(x, y):
+        return (x, y, tw, th)
+
+    tries = (
+        at(clamp(want_x, tw, pane_w), want_y),
+        at(want_x, clamp(want_y, th, pane_h)),
+        at(clamp(want_x, tw, pane_w), back_y),
+        at(back_x, clamp(want_y, th, pane_h)),
+    )
+    for box in tries:
+        if _inside(box, pane_w, pane_h) and all(_clears(box, other) for other in avoid):
+            return box
+    return at(clamp(want_x, tw, pane_w), clamp(want_y, th, pane_h))
+
+
+def _place_beside(box, pane_w, pane_h, avoid):
+    if _inside(box, pane_w, pane_h) and all(_clears(box, other) for other in avoid):
+        return box
+    return None
 
 
 def _polygon(xy, first: int, count: int, scale: float) -> QPolygonF:
@@ -217,6 +317,7 @@ class PlotWidget(QWidget):
             painter.setPen(QPen(ink, 1.0))
             painter.setBrush(QColor(ink.red(), ink.green(), ink.blue(), 48))
             painter.drawRect(band)
+            self._paint_band_readout(painter, left, top, width, height, ink)
         if self._reading is not None:
             reading = self._reading
             hx = left + reading.px
@@ -231,6 +332,94 @@ class PlotWidget(QWidget):
             painter.drawText(QRect(left + 8, top + 4, width - 16, 18),
                              Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                              f"{_label(reading.x)}    {_label(reading.y)}")
+
+    def _paint_band_readout(self, painter: QPainter, left: int, top: int, width: int,
+                             height: int, ink: QColor) -> None:
+        # The corners are asked of the same mapping the zoom uses on release,
+        # and written the way the ticks beside them are written. A second copy
+        # of either would be a number that can disagree with the window it names.
+        if width <= 0 or height <= 0 or self._band is None:
+            return
+        start, end = self._band
+
+        def pane(pos):
+            return (min(max(pos.x() - left, 0.0), float(width)),
+                    min(max(pos.y() - top, 0.0), float(height)))
+
+        sx, sy = pane(start)
+        ex, ey = pane(end)
+        x_log = any(tick.axis == 0 and tick.logarithmic for tick in self._ticks)
+        y_log = any(tick.axis == 1 and tick.logarithmic for tick in self._ticks)
+        view_x0 = self._plot.view_min_x()
+        view_x1 = self._plot.view_max_x()
+        view_y0 = self._plot.view_min_y()
+        view_y1 = self._plot.view_max_y()
+        common_y = self._plot.line_count() == 0 or self._plot.own_count() < self._plot.line_count()
+
+        def nx(value: float) -> str:
+            return _axis_number(value, view_x0, view_x1, x_log)
+
+        def ny(value: float) -> str:
+            return _axis_number(value, view_y0, view_y1, y_log)
+
+        start_x = self._plot.data_x_at(sx)
+        end_x = self._plot.data_x_at(ex)
+        if common_y:
+            start_text = f"{nx(start_x)}, {ny(self._plot.data_y_at(sy))}"
+            end_text = f"{nx(end_x)}, {ny(self._plot.data_y_at(ey))}"
+            height_text = "∆" + ny(abs(self._plot.data_y_at(ey) - self._plot.data_y_at(sy)))
+        else:
+            start_text = nx(start_x)
+            end_text = nx(end_x)
+            height_text = ""
+        width_text = "∆" + nx(abs(end_x - start_x))
+
+        metrics = QFontMetrics(painter.font())
+
+        def box_size(text: str):
+            return metrics.horizontalAdvance(text) + 8, metrics.height() + 4
+
+        band = (min(sx, ex), min(sy, ey), abs(ex - sx), abs(ey - sy))
+        pointer = (ex, ey, float(_POINTER), float(_POINTER))
+        runs_right = 1 if ex >= sx else -1
+        runs_down = 1 if ey >= sy else -1
+        start_w, start_h = box_size(start_text)
+        end_w, end_h = box_size(end_text)
+        start_box = _place_corner(sx, sy, -runs_right, -runs_down, start_w, start_h,
+                                   width, height, [band, pointer])
+        end_box = _place_corner(ex, ey, runs_right, runs_down, end_w, end_h,
+                                 width, height, [band, pointer])
+        labels = [(start_box, start_text), (end_box, end_text)]
+        occupied = [band, pointer, start_box, end_box]
+
+        width_w, width_h = box_size(width_text)
+        if width_w <= band[2]:
+            centered = band[0] + (band[2] - width_w) / 2.0
+            above = (centered, band[1] - _CLEAR - width_h, width_w, width_h)
+            below = (centered, band[1] + band[3] + _CLEAR, width_w, width_h)
+            placed = _place_beside(above, width, height, occupied) or _place_beside(
+                below, width, height, occupied)
+            if placed is not None:
+                labels.append((placed, width_text))
+                occupied.append(placed)
+        if height_text:
+            height_w, height_h = box_size(height_text)
+            if height_h <= band[3]:
+                centered = band[1] + (band[3] - height_h) / 2.0
+                west = (band[0] - _CLEAR - height_w, centered, height_w, height_h)
+                east = (band[0] + band[2] + _CLEAR, centered, height_w, height_h)
+                placed = _place_beside(west, width, height, occupied) or _place_beside(
+                    east, width, height, occupied)
+                if placed is not None:
+                    labels.append((placed, height_text))
+
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for box, text in labels:
+            rect = QRect(left + int(round(box[0])), top + int(round(box[1])),
+                         int(round(box[2])), int(round(box[3])))
+            painter.fillRect(rect, QColor(0, 0, 0, 210))
+            painter.setPen(ink)
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
     def _curves(self, width: int, height: int) -> QImage:
         # Stroke in device pixels, with an integer pen width and no painter
