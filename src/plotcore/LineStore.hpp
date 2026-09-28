@@ -75,6 +75,15 @@ public:
     /// zoom stretches the whole-line summary.
     void setAxis(const double* values, qsizetype count);
 
+    /// The same axis, arriving in pieces. `setAxis` wants the whole buffer.
+    /// A dataset is folded as each piece lands and the raw samples are not
+    /// held; the axis is absent until `finishAxis`. A closer look finer than
+    /// its base asks `setAxisReader`.
+    void beginAxis(long long count);
+    void addAxisSamples(const double* values, long long count);
+    void finishAxis();
+    void setAxisReader(WindowReader reader, void* user);
+
     void clearLines();
     void setPaneColumns(int columns);
     void setVisibleRange(double xMin, double xMax);
@@ -138,6 +147,8 @@ private:
 
     [[nodiscard]] int pointsFor() const;
     void adopt(Entry& entry);
+    void dropAxis();
+    void acceptAxis();
     void rebuildWhole(Entry& entry);
     void refreshCloser();
     void refreshEntry(Entry& entry, const std::optional<PlotWindow>& wanted);
@@ -156,6 +167,9 @@ private:
     int cap_ = kMinPoints;
     double viewMin_ = 0.0;
     double viewMax_ = 1.0;
+    double askedMin_ = 0.0;
+    double askedMax_ = 1.0;
+    bool asked_ = false;
     long long length_ = 0;
     double minimum_ = 0.0;
     double maximum_ = 1.0;

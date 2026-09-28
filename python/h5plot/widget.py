@@ -92,6 +92,11 @@ class PlotWidget(QWidget):
         self._plot.reset_view()
         self._reproject()
 
+    def set_x_hdf5(self, path, dataset: str):
+        self._plot.set_x_hdf5(path, dataset)
+        self._plot.reset_view()
+        self._reproject()
+
     def add_line(self, y, colour=None):
         self._plot.add_line(y, colour)
         self._plot.reset_view()

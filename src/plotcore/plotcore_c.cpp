@@ -209,6 +209,37 @@ void h5plot_set_axis(H5Plot* plot, const double* x, long long n)
     plot->camera.reset();
 }
 
+void h5plot_begin_axis(H5Plot* plot, long long n)
+{
+    if (plot != nullptr) {
+        plot->store.beginAxis(n);
+    }
+}
+
+void h5plot_add_axis_samples(H5Plot* plot, const double* x, long long n)
+{
+    if (plot != nullptr) {
+        plot->store.addAxisSamples(x, n);
+    }
+}
+
+void h5plot_finish_axis(H5Plot* plot)
+{
+    if (plot == nullptr) {
+        return;
+    }
+    plot->store.finishAxis();
+    plot->syncExtent();
+    plot->camera.reset();
+}
+
+void h5plot_set_axis_reader(H5Plot* plot, H5PlotRead read, void* user)
+{
+    if (plot != nullptr) {
+        plot->store.setAxisReader(read, user);
+    }
+}
+
 void h5plot_clear(H5Plot* plot)
 {
     if (plot == nullptr) {

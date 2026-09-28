@@ -85,6 +85,10 @@ _lib.h5plot_finish_line.argtypes = [c_void_p, c_int]
 _READ = ctypes.CFUNCTYPE(c_int, c_void_p, c_longlong, c_longlong, POINTER(c_double))
 _lib.h5plot_set_reader.argtypes = [c_void_p, c_int, _READ, c_void_p]
 _lib.h5plot_set_axis.argtypes = [c_void_p, POINTER(c_double), c_longlong]
+_lib.h5plot_begin_axis.argtypes = [c_void_p, c_longlong]
+_lib.h5plot_add_axis_samples.argtypes = [c_void_p, POINTER(c_double), c_longlong]
+_lib.h5plot_finish_axis.argtypes = [c_void_p]
+_lib.h5plot_set_axis_reader.argtypes = [c_void_p, _READ, c_void_p]
 _lib.h5plot_clear.argtypes = [c_void_p]
 _lib.h5plot_set_pane.argtypes = [c_void_p, c_int, c_int, c_double]
 _lib.h5plot_set_ylog.argtypes = [c_void_p, c_int]
@@ -173,12 +177,55 @@ class Plot:
         import numpy as np
 
         if x is None:
+            self._drop_x_file()
             self._x = None
             _lib.h5plot_set_axis(self._handle, None, 0)
             return
+        self._drop_x_file()
         array = np.ascontiguousarray(x, dtype=np.float64)
         self._x = array
         _lib.h5plot_set_axis(self._handle, array.ctypes.data_as(POINTER(c_double)), array.size)
+
+    def set_x_hdf5(self, path, dataset: str) -> None:
+        """Stream a 1-D numeric dataset in as the shared x.
+
+        Folded in the same pieces as a curve, then the chunk is dropped.
+        The file stays open so a closer look can read that window back.
+        The values have to go one way, as with `set_x`.
+        """
+        import h5py
+        import numpy as np
+
+        self._drop_x_file()
+        self._x = None
+        handle = h5py.File(path, "r")
+        try:
+            data = handle[dataset]
+            if getattr(data, "ndim", None) != 1 or not np.issubdtype(data.dtype, np.number):
+                raise ValueError(f"{dataset} is not a 1-D numeric dataset")
+            count = int(data.shape[0])
+            if count < 2:
+                raise ValueError(f"{dataset} has fewer than two samples")
+            _lib.h5plot_begin_axis(self._handle, count)
+            step = 1 << 16
+            for start in range(0, count, step):
+                block = np.ascontiguousarray(data[start:start + step], dtype=np.float64)
+                _lib.h5plot_add_axis_samples(self._handle, block.ctypes.data_as(POINTER(c_double)),
+                                             int(block.size))
+            _lib.h5plot_finish_axis(self._handle)
+        except Exception:
+            handle.close()
+            raise
+        self._sources["x"] = (handle, data)
+        token = (self, "x")
+        self._tokens["x"] = token
+        _lib.h5plot_set_axis_reader(self._handle, self._read_cb, c_void_p(id(token)))
+
+    def _drop_x_file(self) -> None:
+        held = self._sources.pop("x", None)
+        self._tokens.pop("x", None)
+        if held is not None:
+            held[0].close()
 
     def add_hdf5(self, path, dataset: str, colour=None) -> int:
         """Stream a 1-D numeric dataset into the pyramid, one read at a time.

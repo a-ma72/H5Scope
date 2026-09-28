@@ -165,7 +165,7 @@ bool LineStore::lineExtent(int index, double& low, double& high) const
     return true;
 }
 
-void LineStore::setAxis(const double* values, qsizetype count)
+void LineStore::dropAxis()
 {
     if (!axis_.whole.empty()) {
         retired_.push_back(std::move(axis_.whole));
@@ -178,14 +178,16 @@ void LineStore::setAxis(const double* values, qsizetype count)
     // The units just changed, or went away. The window in hand was in the
     // old ones, so the next range is applied rather than matched.
     viewMax_ = viewMin_ - 1.0;
-    if (values == nullptr || count < 2) {
+    asked_ = false;
+}
+
+void LineStore::acceptAxis()
+{
+    if (axis_.pyramid.length < 2) {
+        hasAxis_ = false;
         emitChanged();
         return;
     }
-    axis_.values = values;
-    axis_.count = count;
-    const long long length = static_cast<long long>(count);
-    axis_.pyramid = pyramidOf(values, length, baseBucketFor(length, kHoldDoubles));
     hasAxis_ = true;
     rebuildWhole(axis_);
     const Extremes extremes = extremesOver(axis_.pyramid, 0, axis_.pyramid.length);
@@ -195,6 +197,58 @@ void LineStore::setAxis(const double* values, qsizetype count)
         axis_.high = extremes.highest;
     }
     emitChanged();
+}
+
+void LineStore::setAxis(const double* values, qsizetype count)
+{
+    dropAxis();
+    if (values == nullptr || count < 2) {
+        emitChanged();
+        return;
+    }
+    axis_.values = values;
+    axis_.count = count;
+    const long long length = static_cast<long long>(count);
+    axis_.pyramid = pyramidOf(values, length, baseBucketFor(length, kHoldDoubles));
+    acceptAxis();
+}
+
+void LineStore::beginAxis(long long count)
+{
+    dropAxis();
+    if (count < 2) {
+        emitChanged();
+        return;
+    }
+    axis_.count = static_cast<qsizetype>(count);
+    axis_.building = std::make_unique<PyramidBuilder>(count, baseBucketFor(count, kHoldDoubles));
+    emitChanged();
+}
+
+void LineStore::addAxisSamples(const double* values, long long count)
+{
+    if (axis_.building == nullptr || values == nullptr || count <= 0) {
+        return;
+    }
+    axis_.building->add(values, count);
+}
+
+void LineStore::finishAxis()
+{
+    if (axis_.building == nullptr) {
+        return;
+    }
+    axis_.pyramid = axis_.building->finish();
+    axis_.building.reset();
+    axis_.count = static_cast<qsizetype>(axis_.pyramid.length);
+    axis_.values = nullptr;
+    acceptAxis();
+}
+
+void LineStore::setAxisReader(WindowReader reader, void* user)
+{
+    axis_.reader = reader;
+    axis_.readerUser = user;
 }
 
 void LineStore::clearLines()
@@ -245,11 +299,21 @@ void LineStore::setPaneColumns(int columns)
         axis_.closerValid = false;
         rebuildWhole(axis_);
     }
+    // The range has not moved, but the fold it was answered with has. The
+    // next call has to run again rather than recognise the same window.
+    asked_ = false;
     emitChanged();
 }
 
 void LineStore::setVisibleRange(double xMin, double xMax)
 {
+    // The same window, already turned into positions. Asking again would
+    // re-read a time base that is not in memory, on a frame that did not move.
+    if (asked_ && xMin == askedMin_ && xMax == askedMax_) {
+        return;
+    }
+    const double askedMin = xMin;
+    const double askedMax = xMax;
     double low = xMin;
     double high = xMax;
     if (hasAxis_) {
@@ -275,6 +339,9 @@ void LineStore::setVisibleRange(double xMin, double xMax)
         }
     }
     if (viewMin_ == low && viewMax_ == high) {
+        asked_ = true;
+        askedMin_ = askedMin;
+        askedMax_ = askedMax;
         return;
     }
     xMin = low;
@@ -290,6 +357,9 @@ void LineStore::setVisibleRange(double xMin, double xMax)
     const PlotWindow axisWindowBefore = axis_.closerWindow;
     viewMin_ = xMin;
     viewMax_ = xMax;
+    asked_ = true;
+    askedMin_ = askedMin;
+    askedMax_ = askedMax;
     refreshCloser();
     const std::optional<PlotWindow> after = previous();
     const bool axisAfter = hasAxis_ && axis_.closerValid;

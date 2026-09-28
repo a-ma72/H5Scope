@@ -68,6 +68,14 @@ H5PLOT_API void h5plot_set_reader(H5Plot* plot, int index, H5PlotRead read, void
 
 /* Shared x, borrowed. n < 2 clears it and x is the sample index again. */
 H5PLOT_API void h5plot_set_axis(H5Plot* plot, const double* x, long long n);
+
+/* The same axis, one read at a time. Not in the picture until finish.
+ * The samples need not outlive add_axis_samples. The reader is asked when
+ * a closer look is finer than the pyramid, and writes `count` doubles. */
+H5PLOT_API void h5plot_begin_axis(H5Plot* plot, long long n);
+H5PLOT_API void h5plot_add_axis_samples(H5Plot* plot, const double* x, long long n);
+H5PLOT_API void h5plot_finish_axis(H5Plot* plot);
+H5PLOT_API void h5plot_set_axis_reader(H5Plot* plot, H5PlotRead read, void* user);
 H5PLOT_API void h5plot_clear(H5Plot* plot);
 
 H5PLOT_API void h5plot_set_pane(H5Plot* plot, int width, int height, double pixel_ratio);
