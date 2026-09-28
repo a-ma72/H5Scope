@@ -25,6 +25,7 @@ public:
 
     static constexpr int kMaxVertices = 2 << 20;
     static constexpr double kPanKeep = 0.25;
+    static constexpr double kMinimumBand = 12.0;
 
     void setDataExtent(double xMin, double xMax, double yMin, double yMax, double xPositiveMin,
                        double yPositiveMin);
@@ -49,6 +50,14 @@ public:
     void zoomAt(double fx, double fy, double factor, bool onlyX, bool onlyY);
     void panBy(double dx, double dy, double areaWidth, double areaHeight);
 
+    /// Pane-local pixels, origin at the top left, y downward. A band under
+    /// `kMinimumBand` pixels on either side is a slip, not a window, and is
+    /// refused whole: a two-pixel-tall band is a magnification the reader
+    /// never asked for, and which axis they meant is not something to guess.
+    /// The same refusal as PlotSurface.zoomToRegion.
+    bool zoomToRegion(double px0, double py0, double px1, double py1, double areaWidth,
+                      double areaHeight);
+
     [[nodiscard]] PlotView frame(double width, double height, double pixelRatio,
                                  int lineCount) const;
 
@@ -63,8 +72,24 @@ private:
                                   double base) const;
     void zoomedAxis(double& zoom, double& pan, double low, double high, double fraction,
                     double factor, bool logarithmic, double base, double minimumSpan);
+    void setViewRange(double x0, double x1, double y0, double y1);
+    [[nodiscard]] double valueAlong(double low, double high, double at, bool logarithmic,
+                                    double base) const;
+    [[nodiscard]] double dataXAt(double px, double areaWidth) const;
+    [[nodiscard]] double dataYAt(double py, double areaHeight) const;
     [[nodiscard]] double maxZoom() const;
     [[nodiscard]] double minimumSpanX() const;
+    [[nodiscard]] double logZoomCeiling(double full, double held, double fraction,
+                                        double minimumSpan, double base) const;
+
+    struct AxisPlacement
+    {
+        double zoom = 1.0;
+        double pan = 0.0;
+    };
+
+    [[nodiscard]] AxisPlacement viewedAxis(double low, double high, double from, double to,
+                                           bool logarithmic, double base, double minimumSpan) const;
 
     double dataXMin_ = 0.0;
     double dataXMax_ = 1.0;

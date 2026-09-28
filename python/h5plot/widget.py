@@ -66,6 +66,7 @@ class PlotWidget(QWidget):
         self._runs = []
         self._ticks = []
         self._drag = None
+        self._band = None
         self._stroke = QImage()
         self.setMinimumSize(240, 160)
         self.setMouseTracking(True)
@@ -119,9 +120,15 @@ class PlotWidget(QWidget):
                 y = top + int(round(tick.y))
                 painter.drawText(QRect(0, y - 8, _LEFT - 6, 16),
                                  Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, text)
-        if self._xy is None or len(self._runs) == 0:
-            return
-        painter.drawImage(QRect(left, top, width, height), self._curves(width, height))
+        if self._xy is not None and len(self._runs) != 0:
+            painter.drawImage(QRect(left, top, width, height), self._curves(width, height))
+        if self._band is not None:
+            start, end = self._band
+            band = QRect(int(min(start.x(), end.x())), int(min(start.y(), end.y())),
+                         int(abs(end.x() - start.x())), int(abs(end.y() - start.y()))).intersected(area)
+            painter.setPen(QPen(ink, 1.0))
+            painter.setBrush(QColor(ink.red(), ink.green(), ink.blue(), 48))
+            painter.drawRect(band)
 
     def _curves(self, width: int, height: int) -> QImage:
         # Stroke in device pixels, with an integer pen width and no painter
@@ -169,11 +176,20 @@ class PlotWidget(QWidget):
         self._reproject()
 
     def mousePressEvent(self, event: QMouseEvent):
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.RightButton and self._drag is None:
+            self._band = (event.position(), event.position())
+            self.setCursor(Qt.CursorShape.CrossCursor)
+            self.update()
+            return
+        if event.button() == Qt.MouseButton.LeftButton and self._band is None:
             self._drag = event.position()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
 
     def mouseMoveEvent(self, event: QMouseEvent):
+        if self._band is not None:
+            self._band = (self._band[0], event.position())
+            self.update()
+            return
         if self._drag is None:
             return
         pos = event.position()
@@ -182,6 +198,18 @@ class PlotWidget(QWidget):
         self._reproject()
 
     def mouseReleaseEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.RightButton and self._band is not None:
+            start, end = self._band
+            self._band = None
+            self.unsetCursor()
+            left, top, _width, _height = self._pane()
+            moved = self._plot.zoom_rect(start.x() - left, start.y() - top, end.x() - left,
+                                         end.y() - top)
+            if moved:
+                self._reproject()
+            else:
+                self.update()
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag = None
             self.unsetCursor()

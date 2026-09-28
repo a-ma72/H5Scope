@@ -196,6 +196,14 @@ void h5plot_pan(H5Plot* plot, double dx, double dy)
     }
 }
 
+int h5plot_zoom_rect(H5Plot* plot, double x0, double y0, double x1, double y1)
+{
+    if (plot == nullptr) {
+        return 0;
+    }
+    return plot->camera.zoomToRegion(x0, y0, x1, y1, plot->width, plot->height) ? 1 : 0;
+}
+
 double h5plot_view_min_x(const H5Plot* plot)
 {
     return plot != nullptr ? plot->camera.viewMinX() : 0.0;

@@ -86,6 +86,7 @@ private:
     void applyView();
     void zoomAt(const QPointF& pos, double factor, Qt::KeyboardModifiers modifiers);
     void panBy(double dx, double dy);
+    void drawBand(QPainter& painter, const QRect& area) const;
     void drawChrome(QPainter& painter, const QRect& area);
     void drawLines(QPainter& painter);
 
@@ -96,6 +97,9 @@ private:
     bool refilling_ = false;
     bool dragging_ = false;
     QPoint lastDrag_;
+    bool banding_ = false;
+    QPoint bandOrigin_;
+    QPoint bandCurrent_;
 
     std::vector<QPointF> points_;
     std::vector<PlotRun> runs_;

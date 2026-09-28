@@ -226,7 +226,22 @@ void PlotWidget::paintEvent(QPaintEvent*)
     painter.translate(area.topLeft());
     drawLines(painter);
     painter.restore();
+    drawBand(painter, area);
     QMetaObject::invokeMethod(this, &PlotWidget::drew, Qt::QueuedConnection);
+}
+
+void PlotWidget::drawBand(QPainter& painter, const QRect& area) const
+{
+    if (!banding_) {
+        return;
+    }
+    const QRect band = QRect(bandOrigin_, bandCurrent_).normalized().intersected(area);
+    if (band.isEmpty()) {
+        return;
+    }
+    painter.setPen(QPen(ink_, 1.0));
+    painter.setBrush(QColor(ink_.red(), ink_.green(), ink_.blue(), 48));
+    painter.drawRect(band);
 }
 
 void PlotWidget::drawChrome(QPainter& painter, const QRect& area)
@@ -307,7 +322,16 @@ void PlotWidget::wheelEvent(QWheelEvent* event)
 
 void PlotWidget::mousePressEvent(QMouseEvent* event)
 {
-    if (event->button() == Qt::LeftButton) {
+    if (event->button() == Qt::RightButton && !dragging_) {
+        banding_ = true;
+        bandOrigin_ = event->pos();
+        bandCurrent_ = bandOrigin_;
+        setCursor(Qt::CrossCursor);
+        update();
+        event->accept();
+        return;
+    }
+    if (event->button() == Qt::LeftButton && !banding_) {
         dragging_ = true;
         lastDrag_ = event->pos();
         setCursor(Qt::ClosedHandCursor);
@@ -319,6 +343,12 @@ void PlotWidget::mousePressEvent(QMouseEvent* event)
 
 void PlotWidget::mouseMoveEvent(QMouseEvent* event)
 {
+    if (banding_) {
+        bandCurrent_ = event->pos();
+        update();
+        event->accept();
+        return;
+    }
     if (dragging_) {
         const QPoint delta = event->pos() - lastDrag_;
         lastDrag_ = event->pos();
@@ -331,6 +361,20 @@ void PlotWidget::mouseMoveEvent(QMouseEvent* event)
 
 void PlotWidget::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (event->button() == Qt::RightButton && banding_) {
+        banding_ = false;
+        unsetCursor();
+        const QRect area = plotArea();
+        const QPoint from = bandOrigin_ - area.topLeft();
+        const QPoint to = bandCurrent_ - area.topLeft();
+        if (camera_.zoomToRegion(from.x(), from.y(), to.x(), to.y(), area.width(), area.height())) {
+            applyView();
+        } else {
+            update();
+        }
+        event->accept();
+        return;
+    }
     if (event->button() == Qt::LeftButton && dragging_) {
         dragging_ = false;
         unsetCursor();

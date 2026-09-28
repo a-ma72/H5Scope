@@ -57,6 +57,10 @@ H5PLOT_API void h5plot_wheel(H5Plot* plot, double px, double py, double factor, 
                              int control);
 H5PLOT_API void h5plot_pan(H5Plot* plot, double dx, double dy);
 
+/* Pane-local pixels, y downward. Returns 1 when the window moved.
+ * A band under 12 pixels on either side is refused and returns 0. */
+H5PLOT_API int h5plot_zoom_rect(H5Plot* plot, double x0, double y0, double x1, double y1);
+
 H5PLOT_API double h5plot_view_min_x(const H5Plot* plot);
 H5PLOT_API double h5plot_view_max_x(const H5Plot* plot);
 H5PLOT_API double h5plot_view_min_y(const H5Plot* plot);
