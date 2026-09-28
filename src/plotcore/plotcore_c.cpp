@@ -198,6 +198,16 @@ void h5plot_set_reader(H5Plot* plot, int index, H5PlotRead read, void* user)
     }
 }
 
+void h5plot_set_axis(H5Plot* plot, const double* x, long long n)
+{
+    if (plot == nullptr) {
+        return;
+    }
+    plot->store.setAxis(x, static_cast<qsizetype>(std::max<long long>(n, 0)));
+    plot->syncExtent();
+    plot->camera.reset();
+}
+
 void h5plot_clear(H5Plot* plot)
 {
     if (plot == nullptr) {

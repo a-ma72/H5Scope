@@ -86,6 +86,11 @@ class PlotWidget(QWidget):
         height = max(1, self.height() - _TOP - _BOTTOM)
         return left, _TOP, width, height
 
+    def set_x(self, x):
+        self._plot.set_x(x)
+        self._plot.reset_view()
+        self._reproject()
+
     def add_line(self, y, colour=None):
         self._plot.add_line(y, colour)
         self._plot.reset_view()

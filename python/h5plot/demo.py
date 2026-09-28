@@ -23,11 +23,14 @@ from h5plot import PlotWidget
 def main() -> int:
     app = QApplication(sys.argv)
     n = 2_000_000
-    x = np.arange(n)
-    sine = np.sin(2.0 * np.pi * x / 4000.0)
+    sample = np.arange(n)
+    # One second per 4000 samples, so a period of the first curve is one
+    # second and the axis is that time rather than the sample index.
+    time = sample / 4000.0
+    sine = np.sin(2.0 * np.pi * sample / 4000.0)
     sine[n // 2] = 8.0
-    cosine = 0.65 * np.cos(2.0 * np.pi * x / 9000.0)
-    slow = 0.35 * np.sin(2.0 * np.pi * x / 1500.0) + 0.2
+    cosine = 0.65 * np.cos(2.0 * np.pi * sample / 9000.0)
+    slow = 0.35 * np.sin(2.0 * np.pi * sample / 1500.0) + 0.2
 
     window = QWidget()
     window.setWindowTitle("h5plot demo")
@@ -44,6 +47,7 @@ def main() -> int:
     layout.addWidget(plot, 1)
     layout.addWidget(log_y)
     layout.addWidget(hint)
+    plot.set_x(time)
     plot.add_line(sine)
     plot.add_line(cosine)
     plot.add_line(slow)

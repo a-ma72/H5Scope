@@ -65,6 +65,9 @@ H5PLOT_API void h5plot_finish_line(H5Plot* plot, int index);
  * doubles at `out`, the line's elements from `first`. Returns 0 to refuse. */
 typedef int (*H5PlotRead)(void* user, long long first, long long count, double* out);
 H5PLOT_API void h5plot_set_reader(H5Plot* plot, int index, H5PlotRead read, void* user);
+
+/* Shared x, borrowed. n < 2 clears it and x is the sample index again. */
+H5PLOT_API void h5plot_set_axis(H5Plot* plot, const double* x, long long n);
 H5PLOT_API void h5plot_clear(H5Plot* plot);
 
 H5PLOT_API void h5plot_set_pane(H5Plot* plot, int width, int height, double pixel_ratio);

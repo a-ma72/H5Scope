@@ -70,6 +70,7 @@ _lib.h5plot_add_samples.argtypes = [c_void_p, c_int, ctypes.POINTER(c_double), c
 _lib.h5plot_finish_line.argtypes = [c_void_p, c_int]
 _READ = ctypes.CFUNCTYPE(c_int, c_void_p, c_longlong, c_longlong, POINTER(c_double))
 _lib.h5plot_set_reader.argtypes = [c_void_p, c_int, _READ, c_void_p]
+_lib.h5plot_set_axis.argtypes = [c_void_p, POINTER(c_double), c_longlong]
 _lib.h5plot_clear.argtypes = [c_void_p]
 _lib.h5plot_set_pane.argtypes = [c_void_p, c_int, c_int, c_double]
 _lib.h5plot_set_ylog.argtypes = [c_void_p, c_int]
@@ -117,6 +118,7 @@ class Plot:
         if not self._handle:
             raise RuntimeError("h5plot_create failed")
         self._keep: list = []
+        self._x = None
         self._sources: dict = {}
         self._tokens: dict = {}
         self._read_cb = _READ(self._read_window)
@@ -130,6 +132,7 @@ class Plot:
         self._sources.clear()
         self._tokens.clear()
         self._keep.clear()
+        self._x = None
 
     def __del__(self) -> None:
         self.close()
@@ -143,6 +146,23 @@ class Plot:
         self._keep.append(array)
         ptr = array.ctypes.data_as(POINTER(c_double))
         return int(_lib.h5plot_add_line(self._handle, ptr, array.size, colour[0], colour[1], colour[2]))
+
+    def set_x(self, x) -> None:
+        """Borrow one x per sample. None puts the sample index back.
+
+        The array has to go one way. A range of x is then a range of
+        positions, and a zoom reads that run. One that doubles back is drawn,
+        and a zoom stretches the summary.
+        """
+        import numpy as np
+
+        if x is None:
+            self._x = None
+            _lib.h5plot_set_axis(self._handle, None, 0)
+            return
+        array = np.ascontiguousarray(x, dtype=np.float64)
+        self._x = array
+        _lib.h5plot_set_axis(self._handle, array.ctypes.data_as(POINTER(c_double)), array.size)
 
     def add_hdf5(self, path, dataset: str, colour=None) -> int:
         """Stream a 1-D numeric dataset into the pyramid, one read at a time.
@@ -204,6 +224,7 @@ class Plot:
         self._sources.clear()
         self._tokens.clear()
         self._keep.clear()
+        self._x = None
 
     def set_pane(self, width: int, height: int, pixel_ratio: float = 1.0) -> None:
         _lib.h5plot_set_pane(self._handle, int(width), int(height), float(pixel_ratio))

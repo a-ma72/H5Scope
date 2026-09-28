@@ -25,6 +25,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -65,6 +66,15 @@ public:
     using WindowReader = int (*)(void* user, long long first, long long count, double* out);
     void setWindowReader(int index, WindowReader reader, void* user);
 
+    /// The shared x, borrowed like a line.
+    ///
+    /// Absent, x is the sample index. Present, it is one value per sample and
+    /// the numbers on the axis are those values. It has to go one way: a range
+    /// of x is then a range of positions, and the closer look the index axis
+    /// already takes follows. One that doubles back is not that map, and a
+    /// zoom stretches the whole-line summary.
+    void setAxis(const double* values, qsizetype count);
+
     void clearLines();
     void setPaneColumns(int columns);
     void setVisibleRange(double xMin, double xMax);
@@ -88,9 +98,12 @@ public:
     [[nodiscard]] int paneColumns() const { return columns_; }
     [[nodiscard]] long long length() const { return length_; }
 
-    [[nodiscard]] double xMin() const { return 0.0; }
+    [[nodiscard]] double xMin() const { return hasAxis_ && axis_.finite ? axis_.low : 0.0; }
     [[nodiscard]] double xMax() const
     {
+        if (hasAxis_ && axis_.finite) {
+            return axis_.high;
+        }
         return length_ > 1 ? static_cast<double>(length_ - 1) : 1.0;
     }
     [[nodiscard]] double xPositiveMinimum() const;
@@ -127,13 +140,17 @@ private:
     void adopt(Entry& entry);
     void rebuildWhole(Entry& entry);
     void refreshCloser();
+    void refreshEntry(Entry& entry, const std::optional<PlotWindow>& wanted);
     [[nodiscard]] bool readWindow(Entry& entry, const PlotWindow& window,
                                   std::vector<double>& folded);
+    [[nodiscard]] bool positionOf(Entry& entry, double x, double& position, double& resolution);
     void recount();
     [[nodiscard]] PlotLine lineOf(const Entry& entry) const;
     void emitChanged();
 
     std::vector<Entry> lines_;
+    Entry axis_;
+    bool hasAxis_ = false;
     std::vector<std::vector<double>> retired_;
     int columns_ = kDefaultColumns;
     int cap_ = kMinPoints;

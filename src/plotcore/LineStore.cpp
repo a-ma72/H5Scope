@@ -25,6 +25,33 @@ QColor colourAt(int index, const QColor& given)
     return kCycle[static_cast<std::size_t>(index) % (sizeof(kCycle) / sizeof(kCycle[0]))];
 }
 
+/// Which drawn point of one reading of a time base `x` falls on.
+///
+/// The same question as CustomPlot's positionOfX. A time base that only ever
+/// goes one way is a map that can be run backwards; one that doubles back is
+/// not, and `false` says so. The order is asked of this array, not of the
+/// time base as a whole, because a summary can ascend while the elements
+/// under one of its buckets do not.
+bool positionOfX(const std::vector<double>& values, double start, double step, double x,
+                 double& position)
+{
+    if (values.empty() || !(step > 0.0) || !std::isfinite(x)) {
+        return false;
+    }
+    std::size_t at = 0;
+    if (std::is_sorted(values.begin(), values.end())) {
+        at = static_cast<std::size_t>(std::lower_bound(values.begin(), values.end(), x) -
+                                      values.begin());
+    } else if (std::is_sorted(values.rbegin(), values.rend())) {
+        at = static_cast<std::size_t>(
+            std::lower_bound(values.begin(), values.end(), x, std::greater<>{}) - values.begin());
+    } else {
+        return false;
+    }
+    position = start + static_cast<double>(std::min(at, values.size() - 1)) * step;
+    return std::isfinite(position);
+}
+
 } // namespace
 
 void LineStore::emitChanged()
@@ -138,9 +165,43 @@ bool LineStore::lineExtent(int index, double& low, double& high) const
     return true;
 }
 
+void LineStore::setAxis(const double* values, qsizetype count)
+{
+    if (!axis_.whole.empty()) {
+        retired_.push_back(std::move(axis_.whole));
+    }
+    if (!axis_.closer.empty()) {
+        retired_.push_back(std::move(axis_.closer));
+    }
+    axis_ = Entry{};
+    hasAxis_ = false;
+    // The units just changed, or went away. The window in hand was in the
+    // old ones, so the next range is applied rather than matched.
+    viewMax_ = viewMin_ - 1.0;
+    if (values == nullptr || count < 2) {
+        emitChanged();
+        return;
+    }
+    axis_.values = values;
+    axis_.count = count;
+    const long long length = static_cast<long long>(count);
+    axis_.pyramid = pyramidOf(values, length, baseBucketFor(length, kHoldDoubles));
+    hasAxis_ = true;
+    rebuildWhole(axis_);
+    const Extremes extremes = extremesOver(axis_.pyramid, 0, axis_.pyramid.length);
+    axis_.finite = extremes.found();
+    if (axis_.finite) {
+        axis_.low = extremes.lowest;
+        axis_.high = extremes.highest;
+    }
+    emitChanged();
+}
+
 void LineStore::clearLines()
 {
     lines_.clear();
+    axis_ = Entry{};
+    hasAxis_ = false;
     retired_.clear();
     length_ = 0;
     minimum_ = 0.0;
@@ -174,14 +235,50 @@ void LineStore::setPaneColumns(int columns)
         entry.closerValid = false;
         rebuildWhole(entry);
     }
+    if (hasAxis_) {
+        if (!axis_.whole.empty()) {
+            retired_.push_back(std::move(axis_.whole));
+        }
+        if (!axis_.closer.empty()) {
+            retired_.push_back(std::move(axis_.closer));
+        }
+        axis_.closerValid = false;
+        rebuildWhole(axis_);
+    }
     emitChanged();
 }
 
 void LineStore::setVisibleRange(double xMin, double xMax)
 {
-    if (viewMin_ == xMin && viewMax_ == xMax) {
+    double low = xMin;
+    double high = xMax;
+    if (hasAxis_) {
+        double first = 0.0;
+        double second = 0.0;
+        double firstResolution = 1.0;
+        double secondResolution = 1.0;
+        if (positionOf(axis_, xMin, first, firstResolution) &&
+            positionOf(axis_, xMax, second, secondResolution)) {
+            if (first > second) {
+                std::swap(first, second);
+                std::swap(firstResolution, secondResolution);
+            }
+            // Opened by the resolution each end was settled at, so the run
+            // does not stop short of a point the pane is still drawing.
+            low = first - firstResolution;
+            high = second + secondResolution;
+        } else {
+            // Not a map. The summary is drawn against the times it has, and
+            // a zoom stretches it rather than being refused.
+            low = 0.0;
+            high = static_cast<double>(std::max(axis_.pyramid.length, length_));
+        }
+    }
+    if (viewMin_ == low && viewMax_ == high) {
         return;
     }
+    xMin = low;
+    xMax = high;
     const auto previous = [this]() -> std::optional<PlotWindow> {
         if (lines_.empty() || !lines_.front().closerValid) {
             return std::nullopt;
@@ -189,11 +286,15 @@ void LineStore::setVisibleRange(double xMin, double xMax)
         return lines_.front().closerWindow;
     };
     const std::optional<PlotWindow> before = previous();
+    const bool axisBefore = hasAxis_ && axis_.closerValid;
+    const PlotWindow axisWindowBefore = axis_.closerWindow;
     viewMin_ = xMin;
     viewMax_ = xMax;
     refreshCloser();
     const std::optional<PlotWindow> after = previous();
-    if (after != before) {
+    const bool axisAfter = hasAxis_ && axis_.closerValid;
+    if (after != before || axisBefore != axisAfter ||
+        (axisAfter && axis_.closerWindow != axisWindowBefore)) {
         emitChanged();
     }
 }
@@ -208,6 +309,18 @@ void LineStore::fillInto(std::vector<PlotLine>& lines, PlotAxis& axis)
     axis = PlotAxis{};
     axis.start = 0.0;
     axis.step = 1.0;
+    if (!hasAxis_ || axis_.whole.empty()) {
+        return;
+    }
+    axis.values = axis_.whole.data();
+    axis.count = static_cast<qsizetype>(axis_.whole.size());
+    axis.valueStep = axis_.wholeStep;
+    if (axis_.closerValid && !axis_.closer.empty()) {
+        axis.closerValues = axis_.closer.data();
+        axis.closerCount = static_cast<qsizetype>(axis_.closer.size());
+        axis.closerStart = static_cast<double>(axis_.closerWindow.first);
+        axis.closerStep = axis_.closerStep;
+    }
 }
 
 void LineStore::releaseRetired()
@@ -258,37 +371,47 @@ void LineStore::refreshCloser()
     if (lines_.empty() || length_ <= 0) {
         return;
     }
-    const std::optional<PlotWindow> wanted = windowFor(viewMin_, viewMax_, length_, cap_ / 2);
+    const long long domain = hasAxis_ && axis_.pyramid.length > 0 ? axis_.pyramid.length : length_;
+    const std::optional<PlotWindow> wanted = windowFor(viewMin_, viewMax_, domain, cap_ / 2);
     for (Entry& entry : lines_) {
-        if (!wanted.has_value()) {
-            if (entry.closerValid) {
-                retired_.push_back(std::move(entry.closer));
-                entry.closerValid = false;
-            }
-            continue;
-        }
-        if (entry.closerValid && entry.closerWindow == *wanted) {
-            continue;
-        }
-        std::vector<double> folded;
-        // The pyramid answers every window at or above its base. Below that
-        // the samples are not in memory, and only the reader — the file —
-        // still has them. Without one, the whole-line summary stays up.
-        if (!fillWindow(entry.pyramid, *wanted, folded) && !readWindow(entry, *wanted, folded)) {
-            if (entry.closerValid) {
-                retired_.push_back(std::move(entry.closer));
-                entry.closerValid = false;
-            }
-            continue;
-        }
+        refreshEntry(entry, wanted);
+    }
+    if (hasAxis_) {
+        refreshEntry(axis_, wanted);
+    }
+}
+
+void LineStore::refreshEntry(Entry& entry, const std::optional<PlotWindow>& wanted)
+{
+    if (!wanted.has_value()) {
         if (entry.closerValid) {
             retired_.push_back(std::move(entry.closer));
+            entry.closerValid = false;
         }
-        entry.closer = std::move(folded);
-        entry.closerWindow = *wanted;
-        entry.closerStep = wanted->bucket == 1 ? 1.0 : static_cast<double>(wanted->bucket) / 2.0;
-        entry.closerValid = true;
+        return;
     }
+    if (entry.closerValid && entry.closerWindow == *wanted) {
+        return;
+    }
+    std::vector<double> folded;
+    // The pyramid answers every window at or above its base. Below that
+    // the samples are not in memory, and only the reader — the file, or
+    // the borrowed buffer — still has them. Without one, the whole-line
+    // summary stays up.
+    if (!fillWindow(entry.pyramid, *wanted, folded) && !readWindow(entry, *wanted, folded)) {
+        if (entry.closerValid) {
+            retired_.push_back(std::move(entry.closer));
+            entry.closerValid = false;
+        }
+        return;
+    }
+    if (entry.closerValid) {
+        retired_.push_back(std::move(entry.closer));
+    }
+    entry.closer = std::move(folded);
+    entry.closerWindow = *wanted;
+    entry.closerStep = wanted->bucket == 1 ? 1.0 : static_cast<double>(wanted->bucket) / 2.0;
+    entry.closerValid = true;
 }
 
 bool LineStore::readWindow(Entry& entry, const PlotWindow& window, std::vector<double>& folded)
@@ -318,6 +441,39 @@ bool LineStore::readWindow(Entry& entry, const PlotWindow& window, std::vector<d
     folded.clear();
     reduceBuckets(raw.data(), window.span, window.bucket, folded);
     return !folded.empty();
+}
+
+bool LineStore::positionOf(Entry& entry, double x, double& position, double& resolution)
+{
+    if (!positionOfX(entry.whole, 0.0, entry.wholeStep, x, position)) {
+        return false;
+    }
+    resolution = entry.wholeStep;
+    const long long length = entry.pyramid.length;
+    if (!(resolution > 1.0) || length <= 1 || (entry.values == nullptr && entry.reader == nullptr)) {
+        return true;
+    }
+    // The summary's bracket is as wide as one of its drawn points. On a long
+    // line that is thousands of elements, and the run that came back would
+    // stay that coarse however far the reader zoomed. The samples around the
+    // answer are the sharper reading.
+    const auto half = static_cast<long long>(std::ceil(resolution));
+    PlotWindow window;
+    window.bucket = 1;
+    const double origin = std::clamp(position - static_cast<double>(half), 0.0,
+                                     static_cast<double>(length - 1));
+    window.first = static_cast<long long>(origin);
+    window.span = std::min(half * 2, length - window.first);
+    std::vector<double> raw;
+    if (window.span <= 0 || !readWindow(entry, window, raw)) {
+        return true;
+    }
+    double closer = 0.0;
+    if (positionOfX(raw, static_cast<double>(window.first), 1.0, x, closer)) {
+        position = closer;
+        resolution = 1.0;
+    }
+    return true;
 }
 
 void LineStore::recount()
@@ -386,6 +542,13 @@ PlotLine LineStore::lineOf(const Entry& entry) const
 
 double LineStore::xPositiveMinimum() const
 {
+    if (hasAxis_) {
+        double positive = 0.0;
+        if (smallestPositive(axis_.pyramid, positive)) {
+            return positive;
+        }
+        return 0.0;
+    }
     return length_ > 1 ? 1.0 : 0.0;
 }
 
