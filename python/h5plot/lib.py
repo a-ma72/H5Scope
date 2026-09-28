@@ -22,6 +22,20 @@ class H5PlotRun(ctypes.Structure):
     ]
 
 
+class H5PlotSample(ctypes.Structure):
+    _fields_ = [
+        ("line", c_int),
+        ("x", c_double),
+        ("y", c_double),
+        ("px", c_double),
+        ("py", c_double),
+        ("red", ctypes.c_ubyte),
+        ("green", ctypes.c_ubyte),
+        ("blue", ctypes.c_ubyte),
+        ("alpha", ctypes.c_ubyte),
+    ]
+
+
 class H5PlotTick(ctypes.Structure):
     _fields_ = [
         ("x", c_double),
@@ -90,6 +104,8 @@ _lib.h5plot_shared_count.argtypes = [c_void_p]
 _lib.h5plot_shared_count.restype = c_int
 _lib.h5plot_nearest.argtypes = [c_void_p, c_double, c_double]
 _lib.h5plot_nearest.restype = c_int
+_lib.h5plot_sample.argtypes = [c_void_p, c_double, c_double, POINTER(H5PlotSample)]
+_lib.h5plot_sample.restype = c_int
 _lib.h5plot_shift_line.argtypes = [c_void_p, c_int, c_double, c_double]
 _lib.h5plot_view_min_x.argtypes = [c_void_p]
 _lib.h5plot_view_min_x.restype = c_double
@@ -261,6 +277,17 @@ class Plot:
 
     def nearest(self, px: float, py: float) -> int:
         return int(_lib.h5plot_nearest(self._handle, px, py))
+
+    def sample(self, px: float, py: float):
+        """The drawn sample closest to a pane-local pixel, or None.
+
+        x and y are that sample's values on the axis the line was drawn
+        against. A shifted line answers in its own y.
+        """
+        found = H5PlotSample()
+        if not _lib.h5plot_sample(self._handle, float(px), float(py), found):
+            return None
+        return found
 
     def shift_line(self, index: int, dx: float, dy: float) -> None:
         _lib.h5plot_shift_line(self._handle, int(index), dx, dy)

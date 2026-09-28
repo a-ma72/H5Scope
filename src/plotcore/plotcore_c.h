@@ -93,6 +93,24 @@ H5PLOT_API int h5plot_shared_count(const H5Plot* plot);
 /* The line whose stroke passes closest to a pane-local pixel, or -1. */
 H5PLOT_API int h5plot_nearest(const H5Plot* plot, double px, double py);
 
+/* The drawn sample closest to a pane-local pixel. x and y are that sample's
+ * values, through the axis the line was drawn on — a shifted line's own y,
+ * not the common one. px and py are where it was drawn. Returns 0 when
+ * nothing drawable is in hand. */
+typedef struct H5PlotSample
+{
+    int line;
+    double x;
+    double y;
+    double px;
+    double py;
+    unsigned char red;
+    unsigned char green;
+    unsigned char blue;
+    unsigned char alpha;
+} H5PlotSample;
+H5PLOT_API int h5plot_sample(const H5Plot* plot, double px, double py, H5PlotSample* out);
+
 /* Move one line in y by a pane-local pixel delta, and give it its own y axis
  * so the numbers beside it are the values it is drawn at. dx is ignored. */
 H5PLOT_API void h5plot_shift_line(H5Plot* plot, int index, double dx, double dy);

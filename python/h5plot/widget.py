@@ -68,6 +68,7 @@ class PlotWidget(QWidget):
         self._drag = None
         self._band = None
         self._shift = None
+        self._reading = None
         self._stroke = QImage()
         self.setMinimumSize(240, 160)
         self.setMouseTracking(True)
@@ -162,6 +163,20 @@ class PlotWidget(QWidget):
             painter.setPen(QPen(ink, 1.0))
             painter.setBrush(QColor(ink.red(), ink.green(), ink.blue(), 48))
             painter.drawRect(band)
+        if self._reading is not None:
+            reading = self._reading
+            hx = left + reading.px
+            hy = top + reading.py
+            painter.setPen(QPen(QColor(70, 70, 70), 1.0))
+            painter.drawLine(left, int(round(hy)), left + width, int(round(hy)))
+            painter.drawLine(int(round(hx)), top, int(round(hx)), top + height)
+            painter.setPen(QColor(reading.red, reading.green, reading.blue))
+            painter.drawLine(int(round(hx)) - 4, int(round(hy)), int(round(hx)) + 4, int(round(hy)))
+            painter.drawLine(int(round(hx)), int(round(hy)) - 4, int(round(hx)), int(round(hy)) + 4)
+            painter.setPen(ink)
+            painter.drawText(QRect(left + 8, top + 4, width - 16, 18),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                             f"{_label(reading.x)}    {_label(reading.y)}")
 
     def _curves(self, width: int, height: int) -> QImage:
         # Stroke in device pixels, with an integer pen width and no painter
@@ -218,17 +233,30 @@ class PlotWidget(QWidget):
                 (event.button() == Qt.MouseButton.LeftButton and alt)) and self._band is None:
             index = self._plot.nearest(*self._pane_point(event.position()))
             if index >= 0:
+                self._reading = None
                 self._shift = (index, event.position())
                 self.setCursor(Qt.CursorShape.SizeAllCursor)
             return
         if event.button() == Qt.MouseButton.RightButton and self._drag is None and self._shift is None:
+            self._reading = None
             self._band = (event.position(), event.position())
             self.setCursor(Qt.CursorShape.CrossCursor)
             self.update()
             return
         if event.button() == Qt.MouseButton.LeftButton and self._band is None and self._shift is None:
+            self._reading = None
             self._drag = event.position()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def _read(self, pos) -> None:
+        px, py = self._pane_point(pos)
+        self._reading = self._plot.sample(px, py)
+        self.update()
+
+    def leaveEvent(self, event):
+        self._reading = None
+        self.update()
+        super().leaveEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent):
         if self._shift is not None:
@@ -243,7 +271,9 @@ class PlotWidget(QWidget):
             self.update()
             return
         if self._drag is None:
+            self._read(event.position())
             return
+        self._reading = None
         pos = event.position()
         self._plot.pan(pos.x() - self._drag.x(), pos.y() - self._drag.y())
         self._drag = pos

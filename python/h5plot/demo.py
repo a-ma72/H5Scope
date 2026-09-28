@@ -40,7 +40,8 @@ def main() -> int:
     log_y.toggled.connect(plot.set_y_log)
     hint = QLabel("Links verschiebt die Ansicht, rechts zieht ein Rechteck. "
                   "Alt oder die mittlere Taste verschiebt die Kurve unter dem Zeiger "
-                  "in Y und gibt ihr eine eigene Achse.")
+                  "in Y und gibt ihr eine eigene Achse. Der Zeiger liest den Wert "
+                  "der nächsten Kurve.")
     hint.setWordWrap(True)
     layout = QVBoxLayout(window)
     layout.setContentsMargins(0, 0, 0, 0)

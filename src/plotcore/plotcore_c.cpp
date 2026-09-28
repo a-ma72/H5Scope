@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -322,6 +323,83 @@ int h5plot_nearest(const H5Plot* plot, double px, double py)
         return -1;
     }
     return gui::nearestLine(plot->points, plot->runs, plot->lineRuns, px, py, 14.0);
+}
+
+int h5plot_sample(const H5Plot* plot, double px, double py, H5PlotSample* out)
+{
+    if (plot == nullptr || out == nullptr || !(plot->width > 0.0) || !(plot->height > 0.0)) {
+        return 0;
+    }
+    const double w = static_cast<double>(plot->width);
+    const double h = static_cast<double>(plot->height);
+    const gui::PlotView view =
+        plot->camera.frame(w, h, plot->pixelRatio, static_cast<int>(plot->lines.size()));
+    const gui::AxisMapping xMap = gui::xMappingOf(view);
+    if (!xMap.usable || plot->lines.empty()) {
+        return 0;
+    }
+    // The same walk PlotItem::nearestSample takes. The value is the sample
+    // that was drawn, placed by the map that drew it, so a time base and a
+    // line on its own y cannot disagree with the stroke. A later line wins a
+    // tie, because it is the one on top.
+    double bestDistance = std::numeric_limits<double>::infinity();
+    int bestLine = -1;
+    double bestX = 0.0;
+    double bestY = 0.0;
+    double bestPx = 0.0;
+    double bestPy = 0.0;
+    QColor bestColour;
+    for (std::size_t index = 0; index < plot->lines.size(); ++index) {
+        const gui::PlotLine& line = plot->lines[index];
+        if (line.values == nullptr || line.count <= 0) {
+            continue;
+        }
+        gui::PlotView drawn = view;
+        if (index < plot->poses.size() && plot->poses[index].own) {
+            const gui::PlotCamera::Span span = plot->camera.shiftedSpan(plot->poses[index].shiftY);
+            drawn.yMin = span.low;
+            drawn.yMax = span.high;
+        }
+        const gui::AxisMapping yMap = gui::yMappingOf(drawn);
+        if (!yMap.usable) {
+            continue;
+        }
+        for (qsizetype i = 0; i < line.count; ++i) {
+            const double value = line.values[i];
+            if (!std::isfinite(value)) {
+                continue;
+            }
+            const double x = gui::xOf(line, plot->axis, i);
+            if (!std::isfinite(x) || !xMap.draws(x) || !yMap.draws(value)) {
+                continue;
+            }
+            const double sx = xMap.fractionOf(x) * w;
+            const double sy = h - yMap.fractionOf(value) * h;
+            const double distance = (sx - px) * (sx - px) + (sy - py) * (sy - py);
+            if (distance <= bestDistance) {
+                bestDistance = distance;
+                bestLine = static_cast<int>(index);
+                bestX = x;
+                bestY = value;
+                bestPx = sx;
+                bestPy = sy;
+                bestColour = line.colour;
+            }
+        }
+    }
+    if (bestLine < 0) {
+        return 0;
+    }
+    out->line = bestLine;
+    out->x = bestX;
+    out->y = bestY;
+    out->px = bestPx;
+    out->py = bestPy;
+    out->red = static_cast<unsigned char>(bestColour.red());
+    out->green = static_cast<unsigned char>(bestColour.green());
+    out->blue = static_cast<unsigned char>(bestColour.blue());
+    out->alpha = 255;
+    return 1;
 }
 
 void h5plot_shift_line(H5Plot* plot, int index, double /*dx*/, double dy)
