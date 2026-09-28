@@ -1,0 +1,13 @@
+MANIFEST.in
+pyproject.toml
+setup.py
+h5plot/__init__.py
+h5plot/demo.py
+h5plot/h5plot.dll
+h5plot/lib.py
+h5plot/widget.py
+h5plot.egg-info/PKG-INFO
+h5plot.egg-info/SOURCES.txt
+h5plot.egg-info/dependency_links.txt
+h5plot.egg-info/requires.txt
+h5plot.egg-info/top_level.txt

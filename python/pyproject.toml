@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Andreas Martin
+# SPDX-License-Identifier: GPL-3.0-only
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "h5plot"
+version = "0.1.0"
+description = "Look at large 1-D arrays from RAM: an envelope, several curves, one window."
+requires-python = ">=3.11"
+license = "GPL-3.0-only"
+authors = [{ name = "Andreas Martin" }]
+dependencies = ["numpy", "PySide6"]
+
+[tool.setuptools]
+packages = ["h5plot"]
+
+[tool.setuptools.package-data]
+h5plot = ["*.dll", "*.so", "*.dylib"]

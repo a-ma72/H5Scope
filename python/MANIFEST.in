@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Andreas Martin
+# SPDX-License-Identifier: GPL-3.0-only
+
+include h5plot/h5plot.dll
+include h5plot/*.py
+global-exclude __pycache__
+global-exclude *.pyc
