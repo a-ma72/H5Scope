@@ -18,10 +18,10 @@
 namespace gui {
 namespace {
 
-constexpr int kGutterLeft = 56;
 constexpr int kGutterBottom = 28;
 constexpr int kGutterTop = 8;
 constexpr int kGutterRight = 8;
+constexpr int kOwnColumn = 56;
 constexpr int kTickTarget = 6;
 
 double niceStep(double span, int target)
@@ -62,8 +62,27 @@ void PlotWidget::setLines(std::vector<PlotLine> lines, const PlotAxis& axis)
 void PlotWidget::clear()
 {
     lines_.clear();
+    poses_.clear();
     axis_ = PlotAxis{};
     update();
+}
+
+void PlotWidget::syncPoses()
+{
+    if (poses_.size() != lines_.size()) {
+        poses_.resize(lines_.size());
+    }
+}
+
+int PlotWidget::ownCount() const
+{
+    int count = 0;
+    for (const LinePose& pose : poses_) {
+        if (pose.own) {
+            ++count;
+        }
+    }
+    return count;
 }
 
 void PlotWidget::setStore(LineStore* store)
@@ -135,7 +154,8 @@ int PlotWidget::paneColumns() const
 
 QRect PlotWidget::plotArea() const
 {
-    const int left = kGutterLeft;
+    const bool common = lineCount() == 0 || ownCount() < lineCount();
+    const int left = kOwnColumn * (ownCount() + (common ? 1 : 0));
     const int top = kGutterTop;
     const int right = std::max(left + 1, width() - kGutterRight);
     const int bottom = std::max(top + 1, height() - kGutterBottom);
@@ -153,11 +173,27 @@ void PlotWidget::projectAll()
     points_.clear();
     runs_.clear();
     const auto lines = static_cast<std::size_t>(lineCount());
+    syncPoses();
+    xSpan_ = camera_.xSpan();
+    const double commonY = camera_.ySpan();
     const PlotView view = viewForFrame();
     lineRuns_.assign(lines + 1, 0);
     for (std::size_t line = 0; line < lines; ++line) {
+        LinePose& pose = poses_[line];
+        pose.ySpan = commonY;
+        lines_[line].ownY = pose.own;
+        lines_[line].yMin = view.yMin;
+        lines_[line].yMax = view.yMax;
+        PlotView drawn = view;
+        if (pose.own) {
+            const PlotCamera::Span span = camera_.shiftedSpan(pose.shiftY);
+            drawn.yMin = span.low;
+            drawn.yMax = span.high;
+            lines_[line].yMin = span.low;
+            lines_[line].yMax = span.high;
+        }
         lineRuns_[line] = static_cast<int>(runs_.size());
-        projectLine(lines_[line], axis_, lineView(lines_[line], view), points_, runs_);
+        projectLine(lines_[line], axis_, drawn, points_, runs_);
     }
     lineRuns_[lines] = static_cast<int>(runs_.size());
     drawnPoints_ = static_cast<int>(points_.size());
@@ -268,7 +304,8 @@ void PlotWidget::drawChrome(QPainter& painter, const QRect& area)
             painter.setPen(QPen(rule_, 1.0));
         }
     }
-    if (yStep > 0.0 && std::isfinite(view.yMin) && std::isfinite(view.yMax)) {
+    const bool shared = lineCount() == 0 || ownCount() < lineCount();
+    if (shared && yStep > 0.0 && std::isfinite(view.yMin) && std::isfinite(view.yMax)) {
         const double first = std::ceil(view.yMin / yStep) * yStep;
         for (double y = first; y <= view.yMax + yStep * 0.5; y += yStep) {
             const double fraction = yFractionOf(y, view);
@@ -278,13 +315,36 @@ void PlotWidget::drawChrome(QPainter& painter, const QRect& area)
             const int py = area.bottom() - static_cast<int>(std::lround(fraction * area.height()));
             painter.drawLine(area.left(), py, area.right(), py);
             painter.setPen(ink_);
-            painter.drawText(QRect(0, py - 8, kGutterLeft - 6, 16),
+            painter.drawText(QRect(area.left() - kOwnColumn, py - 8, kOwnColumn - 6, 16),
                              Qt::AlignRight | Qt::AlignVCenter, QString::number(y, 'g', 6));
             painter.setPen(QPen(rule_, 1.0));
         }
     }
     painter.setPen(QPen(ink_, 1.0));
     painter.drawRect(area.adjusted(0, 0, -1, -1));
+    int slot = 0;
+    for (const PlotLine& line : lines_) {
+        if (!line.ownY || !(line.yMax > line.yMin)) {
+            continue;
+        }
+        const double step = niceStep(line.yMax - line.yMin, kTickTarget);
+        if (!(step > 0.0)) {
+            continue;
+        }
+        painter.setPen(line.colour);
+        const int column = slot * kOwnColumn;
+        PlotView own = view;
+        own.yMin = line.yMin;
+        own.yMax = line.yMax;
+        const double first = std::ceil(line.yMin / step) * step;
+        for (double y = first; y <= line.yMax + step * 0.5; y += step) {
+            const double fraction = yFractionOf(y, own);
+            const int py = area.bottom() - static_cast<int>(std::lround(fraction * area.height()));
+            painter.drawText(QRect(column, py - 8, kOwnColumn - 6, 16), Qt::AlignRight | Qt::AlignVCenter,
+                             QString::number(y, 'g', 6));
+        }
+        ++slot;
+    }
 }
 
 void PlotWidget::drawLines(QPainter& painter)
@@ -320,9 +380,37 @@ void PlotWidget::wheelEvent(QWheelEvent* event)
     event->accept();
 }
 
+void PlotWidget::shiftLine(int index, double /*dx*/, double dy)
+{
+    syncPoses();
+    if (index < 0 || index >= static_cast<int>(poses_.size())) {
+        return;
+    }
+    LinePose& pose = poses_[static_cast<std::size_t>(index)];
+    const QRect area = plotArea();
+    pose.own = true;
+    if (area.height() > 0 && pose.ySpan != 0.0) {
+        pose.shiftY += dy / static_cast<double>(area.height()) * pose.ySpan;
+    }
+    update();
+}
+
 void PlotWidget::mousePressEvent(QMouseEvent* event)
 {
-    if (event->button() == Qt::RightButton && !dragging_) {
+    const bool alt = event->modifiers().testFlag(Qt::AltModifier);
+    if ((event->button() == Qt::MiddleButton || (event->button() == Qt::LeftButton && alt)) &&
+        !banding_) {
+        const QRect area = plotArea();
+        const QPoint local = event->pos() - area.topLeft();
+        shifting_ = nearestLine(points_, runs_, lineRuns_, local.x(), local.y(), 14.0);
+        if (shifting_ >= 0) {
+            shiftLast_ = event->pos();
+            setCursor(Qt::SizeAllCursor);
+        }
+        event->accept();
+        return;
+    }
+    if (event->button() == Qt::RightButton && !dragging_ && shifting_ < 0) {
         banding_ = true;
         bandOrigin_ = event->pos();
         bandCurrent_ = bandOrigin_;
@@ -331,7 +419,7 @@ void PlotWidget::mousePressEvent(QMouseEvent* event)
         event->accept();
         return;
     }
-    if (event->button() == Qt::LeftButton && !banding_) {
+    if (event->button() == Qt::LeftButton && !banding_ && shifting_ < 0) {
         dragging_ = true;
         lastDrag_ = event->pos();
         setCursor(Qt::ClosedHandCursor);
@@ -343,6 +431,13 @@ void PlotWidget::mousePressEvent(QMouseEvent* event)
 
 void PlotWidget::mouseMoveEvent(QMouseEvent* event)
 {
+    if (shifting_ >= 0) {
+        const QPoint delta = event->pos() - shiftLast_;
+        shiftLast_ = event->pos();
+        shiftLine(shifting_, delta.x(), delta.y());
+        event->accept();
+        return;
+    }
     if (banding_) {
         bandCurrent_ = event->pos();
         update();
@@ -361,6 +456,12 @@ void PlotWidget::mouseMoveEvent(QMouseEvent* event)
 
 void PlotWidget::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (shifting_ >= 0 && (event->button() == Qt::MiddleButton || event->button() == Qt::LeftButton)) {
+        shifting_ = -1;
+        unsetCursor();
+        event->accept();
+        return;
+    }
     if (event->button() == Qt::RightButton && banding_) {
         banding_ = false;
         unsetCursor();

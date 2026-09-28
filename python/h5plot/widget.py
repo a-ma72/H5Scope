@@ -26,10 +26,10 @@ from PySide6.QtWidgets import QWidget
 from .lib import Plot
 
 # Room for the numbers. The curve is projected into what is left.
-_LEFT = 72
 _TOP = 8
 _RIGHT = 12
 _BOTTOM = 28
+_OWN_COLUMN = 64
 
 
 def _label(value: float) -> str:
@@ -67,14 +67,24 @@ class PlotWidget(QWidget):
         self._ticks = []
         self._drag = None
         self._band = None
+        self._shift = None
         self._stroke = QImage()
         self.setMinimumSize(240, 160)
         self.setMouseTracking(True)
 
+    def _columns(self) -> tuple[int, int]:
+        """Own-axis columns, then whether the common y axis still has a column."""
+        own = self._plot.own_count()
+        lines = self._plot.line_count()
+        common = 0 if lines > 0 and own >= lines else 1
+        return own, common
+
     def _pane(self) -> tuple[int, int, int, int]:
-        width = max(1, self.width() - _LEFT - _RIGHT)
+        own, common = self._columns()
+        left = _OWN_COLUMN * (own + common)
+        width = max(1, self.width() - left - _RIGHT)
         height = max(1, self.height() - _TOP - _BOTTOM)
-        return _LEFT, _TOP, width, height
+        return left, _TOP, width, height
 
     def add_line(self, y, colour=None):
         self._plot.add_line(y, colour)
@@ -102,6 +112,8 @@ class PlotWidget(QWidget):
         ink = QColor(220, 220, 220)
         painter.setPen(QPen(rule, 1.0))
         for tick in self._ticks:
+            if tick.axis == 2:
+                continue
             if tick.axis == 0:
                 x = left + int(round(tick.x))
                 painter.drawLine(x, top, x, top + height)
@@ -110,16 +122,27 @@ class PlotWidget(QWidget):
                 painter.drawLine(left, y, left + width, y)
         painter.setPen(QPen(ink, 1.0))
         painter.drawRect(area.adjusted(0, 0, -1, -1))
+        slots = {}
+        for tick in self._ticks:
+            if tick.axis == 2 and tick.series not in slots:
+                slots[tick.series] = len(slots)
         for tick in self._ticks:
             text = _label(tick.value)
             if tick.axis == 0:
                 x = left + int(round(tick.x))
                 painter.drawText(QRect(x - 48, top + height + 2, 96, _BOTTOM - 4),
                                  Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, text)
+            elif tick.axis == 1:
+                y = top + int(round(tick.y))
+                painter.drawText(QRect(left - _OWN_COLUMN, y - 8, _OWN_COLUMN - 6, 16),
+                                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, text)
             else:
                 y = top + int(round(tick.y))
-                painter.drawText(QRect(0, y - 8, _LEFT - 6, 16),
+                slot = slots.get(tick.series, 0)
+                painter.setPen(QColor(tick.red, tick.green, tick.blue))
+                painter.drawText(QRect(slot * _OWN_COLUMN, y - 8, _OWN_COLUMN - 6, 16),
                                  Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, text)
+                painter.setPen(QPen(ink, 1.0))
         if self._xy is not None and len(self._runs) != 0:
             painter.drawImage(QRect(left, top, width, height), self._curves(width, height))
         if self._band is not None:
@@ -175,17 +198,36 @@ class PlotWidget(QWidget):
                          bool(mods & Qt.KeyboardModifier.ControlModifier))
         self._reproject()
 
+    def _pane_point(self, pos):
+        left, top, _width, _height = self._pane()
+        return pos.x() - left, pos.y() - top
+
     def mousePressEvent(self, event: QMouseEvent):
-        if event.button() == Qt.MouseButton.RightButton and self._drag is None:
+        alt = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+        if (event.button() == Qt.MouseButton.MiddleButton or
+                (event.button() == Qt.MouseButton.LeftButton and alt)) and self._band is None:
+            index = self._plot.nearest(*self._pane_point(event.position()))
+            if index >= 0:
+                self._shift = (index, event.position())
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
+            return
+        if event.button() == Qt.MouseButton.RightButton and self._drag is None and self._shift is None:
             self._band = (event.position(), event.position())
             self.setCursor(Qt.CursorShape.CrossCursor)
             self.update()
             return
-        if event.button() == Qt.MouseButton.LeftButton and self._band is None:
+        if event.button() == Qt.MouseButton.LeftButton and self._band is None and self._shift is None:
             self._drag = event.position()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
 
     def mouseMoveEvent(self, event: QMouseEvent):
+        if self._shift is not None:
+            index, last = self._shift
+            pos = event.position()
+            self._plot.shift_line(index, 0.0, pos.y() - last.y())
+            self._shift = (index, pos)
+            self._reproject()
+            return
         if self._band is not None:
             self._band = (self._band[0], event.position())
             self.update()
@@ -198,6 +240,11 @@ class PlotWidget(QWidget):
         self._reproject()
 
     def mouseReleaseEvent(self, event: QMouseEvent):
+        if self._shift is not None and event.button() in (
+                Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton):
+            self._shift = None
+            self.unsetCursor()
+            return
         if event.button() == Qt.MouseButton.RightButton and self._band is not None:
             start, end = self._band
             self._band = None

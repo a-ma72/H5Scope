@@ -61,6 +61,24 @@ public:
     [[nodiscard]] PlotView frame(double width, double height, double pixelRatio,
                                  int lineCount) const;
 
+    /// The linear window a line on its own axis shows. The same share of its
+    /// padded extent that the common axis is showing of its own, then `shift`
+    /// in the line's own units. One gesture still zooms every axis; the shift
+    /// is the part that moves only this line. PlotSurface.separateAxes is the
+    /// share.
+    [[nodiscard]] Span ownSpan(double lineLow, double lineHigh, double shift) const;
+
+    /// The common window, shifted by `shift` in the units a pan is measured in.
+    /// A line drawn in this window sits that far off the common axis, and the
+    /// numbers on the window are the values the line is drawn at. The scale
+    /// stays the common axis's, logarithm included, so a shift does not change
+    /// what a reading means.
+    [[nodiscard]] Span shiftedSpan(double shift) const;
+
+    /// The current window, in the units a pan is measured in.
+    [[nodiscard]] double xSpan() const;
+    [[nodiscard]] double ySpan() const;
+
     [[nodiscard]] Span paddedX() const;
     [[nodiscard]] Span paddedY() const;
 
@@ -106,5 +124,12 @@ private:
     double panX_ = 0.0;
     double panY_ = 0.0;
 };
+
+/// The line whose stroke passes closest to `(px, py)`, or -1 when none comes
+/// within `maxPixels`. `lineRuns` holds one past the last run of each line,
+/// the same sentinel projectLine's callers keep.
+[[nodiscard]] int nearestLine(const std::vector<QPointF>& points, const std::vector<PlotRun>& runs,
+                              const std::vector<int>& lineRuns, double px, double py,
+                              double maxPixels);
 
 } // namespace gui

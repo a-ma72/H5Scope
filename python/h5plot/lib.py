@@ -28,6 +28,11 @@ class H5PlotTick(ctypes.Structure):
         ("y", c_double),
         ("value", c_double),
         ("axis", c_int),
+        ("series", c_int),
+        ("red", ctypes.c_ubyte),
+        ("green", ctypes.c_ubyte),
+        ("blue", ctypes.c_ubyte),
+        ("alpha", ctypes.c_ubyte),
     ]
 
 
@@ -67,6 +72,18 @@ _lib.h5plot_wheel.argtypes = [c_void_p, c_double, c_double, c_double, c_int, c_i
 _lib.h5plot_pan.argtypes = [c_void_p, c_double, c_double]
 _lib.h5plot_zoom_rect.argtypes = [c_void_p, c_double, c_double, c_double, c_double]
 _lib.h5plot_zoom_rect.restype = c_int
+_lib.h5plot_set_own_axis.argtypes = [c_void_p, c_int, c_int]
+_lib.h5plot_line_count.argtypes = [c_void_p]
+_lib.h5plot_line_count.restype = c_int
+_lib.h5plot_own_axis.argtypes = [c_void_p, c_int]
+_lib.h5plot_own_axis.restype = c_int
+_lib.h5plot_own_count.argtypes = [c_void_p]
+_lib.h5plot_own_count.restype = c_int
+_lib.h5plot_shared_count.argtypes = [c_void_p]
+_lib.h5plot_shared_count.restype = c_int
+_lib.h5plot_nearest.argtypes = [c_void_p, c_double, c_double]
+_lib.h5plot_nearest.restype = c_int
+_lib.h5plot_shift_line.argtypes = [c_void_p, c_int, c_double, c_double]
 _lib.h5plot_view_min_x.argtypes = [c_void_p]
 _lib.h5plot_view_min_x.restype = c_double
 _lib.h5plot_view_max_x.argtypes = [c_void_p]
@@ -135,6 +152,27 @@ class Plot:
 
     def zoom_rect(self, x0: float, y0: float, x1: float, y1: float) -> bool:
         return bool(_lib.h5plot_zoom_rect(self._handle, x0, y0, x1, y1))
+
+    def line_count(self) -> int:
+        return int(_lib.h5plot_line_count(self._handle))
+
+    def set_own_axis(self, index: int, on: bool) -> None:
+        _lib.h5plot_set_own_axis(self._handle, int(index), 1 if on else 0)
+
+    def own_axis(self, index: int) -> bool:
+        return bool(_lib.h5plot_own_axis(self._handle, int(index)))
+
+    def own_count(self) -> int:
+        return int(_lib.h5plot_own_count(self._handle))
+
+    def shared_count(self) -> int:
+        return int(_lib.h5plot_shared_count(self._handle))
+
+    def nearest(self, px: float, py: float) -> int:
+        return int(_lib.h5plot_nearest(self._handle, px, py))
+
+    def shift_line(self, index: int, dx: float, dy: float) -> None:
+        _lib.h5plot_shift_line(self._handle, int(index), dx, dy)
 
     def view_min_x(self) -> float:
         return float(_lib.h5plot_view_min_x(self._handle))

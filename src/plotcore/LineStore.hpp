@@ -47,6 +47,14 @@ public:
     void setPaneColumns(int columns);
     void setVisibleRange(double xMin, double xMax);
 
+    /// A line on an axis of its own leaves the common extent. The request is
+    /// kept on the line; the common minimum and maximum are only the lines
+    /// still on the common axis.
+    void setOwnAxis(int index, bool on);
+    [[nodiscard]] bool ownAxis(int index) const;
+    [[nodiscard]] int sharedCount() const { return shared_; }
+    [[nodiscard]] bool lineExtent(int index, double& low, double& high) const;
+
     /// Write the current folds into `lines` / `axis`. Pointers stay valid
     /// until the next fillInto, clearLines, or a rebuild that retires them --
     /// call releaseRetired() only after the renderer has been handed the new
@@ -84,6 +92,10 @@ private:
         PlotWindow closerWindow;
         double closerStep = 1.0;
         bool closerValid = false;
+        bool ownAxis = false;
+        bool finite = false;
+        double low = 0.0;
+        double high = 1.0;
     };
 
     [[nodiscard]] int pointsFor() const;
@@ -104,6 +116,7 @@ private:
     double maximum_ = 1.0;
     double positiveMinimum_ = 0.0;
     bool hasPositive_ = false;
+    int shared_ = 0;
     int nextColour_ = 0;
 };
 

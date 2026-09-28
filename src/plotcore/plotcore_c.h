@@ -33,13 +33,19 @@ typedef struct H5PlotRun
 } H5PlotRun;
 
 /* A tick in the pane set by h5plot_set_pane. y grows downward, as the
- * projected points do. axis is 0 along x and 1 up y. */
+ * projected points do. axis is 0 along x, 1 on the common y, 2 on a line's
+ * own y. series is that line when axis is 2, and -1 otherwise. */
 typedef struct H5PlotTick
 {
     double x;
     double y;
     double value;
     int axis;
+    int series;
+    unsigned char red;
+    unsigned char green;
+    unsigned char blue;
+    unsigned char alpha;
 } H5PlotTick;
 
 H5PLOT_API H5Plot* h5plot_create(void);
@@ -60,6 +66,22 @@ H5PLOT_API void h5plot_pan(H5Plot* plot, double dx, double dy);
 /* Pane-local pixels, y downward. Returns 1 when the window moved.
  * A band under 12 pixels on either side is refused and returns 0. */
 H5PLOT_API int h5plot_zoom_rect(H5Plot* plot, double x0, double y0, double x1, double y1);
+
+/* A shifted line is drawn on its own y axis: the common window, plus that
+ * line's y shift. The common extent is unchanged, so the other curves stay.
+ * Turning the axis off clears the shift and the line returns to the common one. */
+H5PLOT_API void h5plot_set_own_axis(H5Plot* plot, int index, int on);
+H5PLOT_API int h5plot_line_count(const H5Plot* plot);
+H5PLOT_API int h5plot_own_axis(const H5Plot* plot, int index);
+H5PLOT_API int h5plot_own_count(const H5Plot* plot);
+H5PLOT_API int h5plot_shared_count(const H5Plot* plot);
+
+/* The line whose stroke passes closest to a pane-local pixel, or -1. */
+H5PLOT_API int h5plot_nearest(const H5Plot* plot, double px, double py);
+
+/* Move one line in y by a pane-local pixel delta, and give it its own y axis
+ * so the numbers beside it are the values it is drawn at. dx is ignored. */
+H5PLOT_API void h5plot_shift_line(H5Plot* plot, int index, double dx, double dy);
 
 H5PLOT_API double h5plot_view_min_x(const H5Plot* plot);
 H5PLOT_API double h5plot_view_max_x(const H5Plot* plot);

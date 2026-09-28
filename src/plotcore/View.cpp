@@ -375,6 +375,41 @@ double PlotCamera::minimumSpanX() const
     return std::abs(paddedX().high - paddedX().low) / maxZoom();
 }
 
+PlotCamera::Span PlotCamera::ownSpan(double lineLow, double lineHigh, double shift) const
+{
+    const Span whole = padded(lineLow, lineHigh, false, 10.0);
+    const Span common = paddedY();
+    const double cFrom = axisPosition(common.low, yLog_, yLogBase_);
+    const double cTo = axisPosition(common.high, yLog_, yLogBase_);
+    const double vFrom = axisPosition(viewMinY(), yLog_, yLogBase_);
+    const double vTo = axisPosition(viewMaxY(), yLog_, yLogBase_);
+    double lowF = 0.0;
+    double highF = 1.0;
+    if (cTo > cFrom) {
+        lowF = (vFrom - cFrom) / (cTo - cFrom);
+        highF = (vTo - cFrom) / (cTo - cFrom);
+    }
+    const double span = whole.high - whole.low;
+    return {whole.low + lowF * span + shift, whole.low + highF * span + shift};
+}
+
+PlotCamera::Span PlotCamera::shiftedSpan(double shift) const
+{
+    const double from = axisPosition(viewMinY(), yLog_, yLogBase_);
+    const double to = axisPosition(viewMaxY(), yLog_, yLogBase_);
+    return {axisValue(from + shift, yLog_, yLogBase_), axisValue(to + shift, yLog_, yLogBase_)};
+}
+
+double PlotCamera::xSpan() const
+{
+    return axisPosition(viewMaxX(), xLog_, xLogBase_) - axisPosition(viewMinX(), xLog_, xLogBase_);
+}
+
+double PlotCamera::ySpan() const
+{
+    return axisPosition(viewMaxY(), yLog_, yLogBase_) - axisPosition(viewMinY(), yLog_, yLogBase_);
+}
+
 PlotView PlotCamera::frame(double width, double height, double pixelRatio, int lineCount) const
 {
     PlotView view;
@@ -392,6 +427,53 @@ PlotView PlotCamera::frame(double width, double height, double pixelRatio, int l
     const int lines = std::max(lineCount, 1);
     view.maxColumns = std::max(1, kMaxVertices / (4 * lines));
     return view;
+}
+
+namespace {
+
+double distanceToSegment(double px, double py, double ax, double ay, double bx, double by)
+{
+    const double dx = bx - ax;
+    const double dy = by - ay;
+    const double length = dx * dx + dy * dy;
+    double t = 0.0;
+    if (length > 0.0) {
+        t = std::clamp(((px - ax) * dx + (py - ay) * dy) / length, 0.0, 1.0);
+    }
+    const double x = ax + t * dx - px;
+    const double y = ay + t * dy - py;
+    return std::sqrt(x * x + y * y);
+}
+
+} // namespace
+
+int nearestLine(const std::vector<QPointF>& points, const std::vector<PlotRun>& runs,
+                const std::vector<int>& lineRuns, double px, double py, double maxPixels)
+{
+    if (lineRuns.size() < 2 || !(maxPixels > 0.0)) {
+        return -1;
+    }
+    int found = -1;
+    double best = maxPixels;
+    const int lines = static_cast<int>(lineRuns.size()) - 1;
+    for (int line = 0; line < lines; ++line) {
+        const int from = lineRuns[static_cast<std::size_t>(line)];
+        const int to = lineRuns[static_cast<std::size_t>(line) + 1];
+        for (int run = from; run < to; ++run) {
+            const PlotRun& stroke = runs[static_cast<std::size_t>(run)];
+            for (int i = 1; i < stroke.count; ++i) {
+                const QPointF& a = points[static_cast<std::size_t>(stroke.first + i - 1)];
+                const QPointF& b = points[static_cast<std::size_t>(stroke.first + i)];
+                const double distance = distanceToSegment(px, py, a.x(), a.y(), b.x(), b.y());
+                // Later lines are drawn on top, so an equal distance is theirs.
+                if (distance <= best) {
+                    best = distance;
+                    found = line;
+                }
+            }
+        }
+    }
+    return found;
 }
 
 } // namespace gui

@@ -60,6 +60,42 @@ int LineStore::addLine(const double* values, qsizetype count, const QColor& colo
     return static_cast<int>(lines_.size()) - 1;
 }
 
+void LineStore::setOwnAxis(int index, bool on)
+{
+    if (index < 0 || index >= lineCount()) {
+        return;
+    }
+    Entry& entry = lines_[static_cast<std::size_t>(index)];
+    if (entry.ownAxis == on) {
+        return;
+    }
+    entry.ownAxis = on;
+    recount();
+    emitChanged();
+}
+
+bool LineStore::ownAxis(int index) const
+{
+    if (index < 0 || index >= lineCount()) {
+        return false;
+    }
+    return lines_[static_cast<std::size_t>(index)].ownAxis;
+}
+
+bool LineStore::lineExtent(int index, double& low, double& high) const
+{
+    if (index < 0 || index >= lineCount()) {
+        return false;
+    }
+    const Entry& entry = lines_[static_cast<std::size_t>(index)];
+    if (!entry.finite) {
+        return false;
+    }
+    low = entry.low;
+    high = entry.high;
+    return true;
+}
+
 void LineStore::clearLines()
 {
     lines_.clear();
@@ -69,7 +105,7 @@ void LineStore::clearLines()
     maximum_ = 1.0;
     positiveMinimum_ = 0.0;
     hasPositive_ = false;
-    nextColour_ = 0;
+    shared_ = 0;
     emitChanged();
 }
 
@@ -201,12 +237,22 @@ void LineStore::recount()
     maximum_ = 1.0;
     positiveMinimum_ = 0.0;
     hasPositive_ = false;
+    shared_ = 0;
     bool any = false;
-    for (const Entry& entry : lines_) {
+    for (Entry& entry : lines_) {
         const Extremes extremes = extremesOver(entry.pyramid, 0, entry.pyramid.length);
-        if (!extremes.found()) {
+        entry.finite = extremes.found();
+        if (entry.finite) {
+            entry.low = extremes.lowest;
+            entry.high = extremes.highest;
+        }
+        // A line on its own axis still has an extent. It is not part of the
+        // common one, which would otherwise be stretched to fit a line the
+        // common axis is no longer drawing.
+        if (entry.ownAxis || !entry.finite) {
             continue;
         }
+        ++shared_;
         if (!any) {
             minimum_ = extremes.lowest;
             maximum_ = extremes.highest;

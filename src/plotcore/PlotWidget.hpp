@@ -87,6 +87,9 @@ private:
     void zoomAt(const QPointF& pos, double factor, Qt::KeyboardModifiers modifiers);
     void panBy(double dx, double dy);
     void drawBand(QPainter& painter, const QRect& area) const;
+    void syncPoses();
+    [[nodiscard]] int ownCount() const;
+    void shiftLine(int index, double dx, double dy);
     void drawChrome(QPainter& painter, const QRect& area);
     void drawLines(QPainter& painter);
 
@@ -100,6 +103,18 @@ private:
     bool banding_ = false;
     QPoint bandOrigin_;
     QPoint bandCurrent_;
+
+    struct LinePose
+    {
+        double shiftX = 0.0;
+        double shiftY = 0.0;
+        bool own = false;
+        double ySpan = 1.0;
+    };
+    std::vector<LinePose> poses_;
+    double xSpan_ = 1.0;
+    int shifting_ = -1;
+    QPoint shiftLast_;
 
     std::vector<QPointF> points_;
     std::vector<PlotRun> runs_;

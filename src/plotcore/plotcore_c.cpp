@@ -29,8 +29,10 @@ double niceStep(double span, int target)
     return magnitude * factor;
 }
 
-void appendTicks(std::vector<H5PlotTick>& ticks, const gui::PlotView& view, bool vertical)
+void appendTicks(std::vector<H5PlotTick>& ticks, const gui::PlotView& view, int axisCode, int series,
+                 unsigned char red, unsigned char green, unsigned char blue)
 {
+    const bool vertical = axisCode != 0;
     const bool logarithmic = vertical ? view.yLog : view.xLog;
     const double base = vertical ? view.yLogBase : view.xLogBase;
     const double low = vertical ? view.yMin : view.xMin;
@@ -77,7 +79,12 @@ void appendTicks(std::vector<H5PlotTick>& ticks, const gui::PlotView& view, bool
         }
         H5PlotTick tick{};
         tick.value = value;
-        tick.axis = vertical ? 1 : 0;
+        tick.axis = axisCode;
+        tick.series = series;
+        tick.red = red;
+        tick.green = green;
+        tick.blue = blue;
+        tick.alpha = 255;
         if (vertical) {
             tick.x = 0.0;
             tick.y = view.height - fraction * view.height;
@@ -91,10 +98,20 @@ void appendTicks(std::vector<H5PlotTick>& ticks, const gui::PlotView& view, bool
 
 } // namespace
 
+struct Pose
+{
+    double shiftX = 0.0;
+    double shiftY = 0.0;
+    bool own = false;
+    double ySpan = 1.0;
+};
+
 struct H5Plot
 {
     gui::LineStore store;
     gui::PlotCamera camera;
+    std::vector<Pose> poses;
+    double xSpan = 1.0;
     std::vector<gui::PlotLine> lines;
     gui::PlotAxis axis;
     std::vector<QPointF> points;
@@ -137,6 +154,9 @@ int h5plot_add_line(H5Plot* plot, const double* y, long long n, int red, int gre
         return -1;
     }
     const int index = plot->store.addLine(y, static_cast<qsizetype>(n), QColor(red, green, blue));
+    if (index >= 0) {
+        plot->poses.emplace_back();
+    }
     plot->syncExtent();
     plot->camera.reset();
     return index;
@@ -148,6 +168,8 @@ void h5plot_clear(H5Plot* plot)
         return;
     }
     plot->store.clearLines();
+    plot->poses.clear();
+    plot->xSpan = 1.0;
     plot->lines.clear();
     plot->points.clear();
     plot->runs.clear();
@@ -204,6 +226,74 @@ int h5plot_zoom_rect(H5Plot* plot, double x0, double y0, double x1, double y1)
     return plot->camera.zoomToRegion(x0, y0, x1, y1, plot->width, plot->height) ? 1 : 0;
 }
 
+void h5plot_set_own_axis(H5Plot* plot, int index, int on)
+{
+    if (plot == nullptr || index < 0 || index >= static_cast<int>(plot->poses.size())) {
+        return;
+    }
+    Pose& pose = plot->poses[static_cast<std::size_t>(index)];
+    pose.own = on != 0;
+    if (!pose.own) {
+        pose.shiftY = 0.0;
+    }
+}
+
+int h5plot_line_count(const H5Plot* plot)
+{
+    return plot != nullptr ? plot->store.lineCount() : 0;
+}
+
+int h5plot_own_axis(const H5Plot* plot, int index)
+{
+    if (plot == nullptr || index < 0 || index >= static_cast<int>(plot->poses.size())) {
+        return 0;
+    }
+    return plot->poses[static_cast<std::size_t>(index)].own ? 1 : 0;
+}
+
+int h5plot_own_count(const H5Plot* plot)
+{
+    if (plot == nullptr) {
+        return 0;
+    }
+    int count = 0;
+    for (const Pose& pose : plot->poses) {
+        if (pose.own) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+int h5plot_shared_count(const H5Plot* plot)
+{
+    return plot != nullptr ? plot->store.sharedCount() : 0;
+}
+
+int h5plot_nearest(const H5Plot* plot, double px, double py)
+{
+    if (plot == nullptr) {
+        return -1;
+    }
+    return gui::nearestLine(plot->points, plot->runs, plot->lineRuns, px, py, 14.0);
+}
+
+void h5plot_shift_line(H5Plot* plot, int index, double /*dx*/, double dy)
+{
+    if (plot == nullptr || index < 0 || index >= static_cast<int>(plot->poses.size())) {
+        return;
+    }
+    // Only y. An x shift would move the curve off the position the shared x
+    // axis still names. The line gains its own y axis so the numbers beside
+    // it move with it; without that, the common ticks would keep describing
+    // the place the curve just left.
+    Pose& pose = plot->poses[static_cast<std::size_t>(index)];
+    pose.own = true;
+    if (plot->height > 0 && pose.ySpan != 0.0) {
+        pose.shiftY += dy / static_cast<double>(plot->height) * pose.ySpan;
+    }
+}
+
 double h5plot_view_min_x(const H5Plot* plot)
 {
     return plot != nullptr ? plot->camera.viewMinX() : 0.0;
@@ -239,27 +329,52 @@ int h5plot_project(H5Plot* plot)
     plot->painted.clear();
     plot->ticks.clear();
     const auto count = plot->lines.size();
+    if (plot->poses.size() != count) {
+        plot->poses.resize(count);
+    }
+    plot->xSpan = plot->camera.xSpan();
+    const double commonY = plot->camera.ySpan();
     plot->lineRuns.assign(count + 1, 0);
     const gui::PlotView view =
         plot->camera.frame(plot->width, plot->height, plot->pixelRatio, static_cast<int>(count));
+    bool anyShared = false;
     for (std::size_t i = 0; i < count; ++i) {
+        Pose& pose = plot->poses[i];
+        gui::PlotLine& line = plot->lines[i];
+        pose.ySpan = commonY;
+        line.ownY = false;
+        gui::PlotView drawn = view;
+        if (pose.own) {
+            const gui::PlotCamera::Span span = plot->camera.shiftedSpan(pose.shiftY);
+            drawn.yMin = span.low;
+            drawn.yMax = span.high;
+        } else {
+            anyShared = true;
+        }
         plot->lineRuns[i] = static_cast<int>(plot->runs.size());
-        gui::projectLine(plot->lines[i], plot->axis, gui::lineView(plot->lines[i], view),
-                         plot->points, plot->runs);
-        const QColor colour = plot->lines[i].colour;
+        gui::projectLine(line, plot->axis, drawn, plot->points, plot->runs);
+        const QColor colour = line.colour;
         const auto alpha = static_cast<unsigned char>(
-            std::lround(std::clamp(colour.alphaF() * plot->lines[i].opacity, 0.0, 1.0) * 255.0));
+            std::lround(std::clamp(colour.alphaF() * line.opacity, 0.0, 1.0) * 255.0));
         for (int r = plot->lineRuns[i]; r < static_cast<int>(plot->runs.size()); ++r) {
             const gui::PlotRun& run = plot->runs[static_cast<std::size_t>(r)];
             plot->painted.push_back(H5PlotRun{run.first, run.count, static_cast<unsigned char>(colour.red()),
                                               static_cast<unsigned char>(colour.green()),
                                               static_cast<unsigned char>(colour.blue()), alpha,
-                                              static_cast<float>(plot->lines[i].width)});
+                                              static_cast<float>(line.width)});
+        }
+        if (pose.own) {
+            appendTicks(plot->ticks, drawn, 2, static_cast<int>(i),
+                        static_cast<unsigned char>(colour.red()),
+                        static_cast<unsigned char>(colour.green()),
+                        static_cast<unsigned char>(colour.blue()));
         }
     }
     plot->lineRuns[count] = static_cast<int>(plot->runs.size());
-    appendTicks(plot->ticks, view, false);
-    appendTicks(plot->ticks, view, true);
+    appendTicks(plot->ticks, view, 0, -1, 180, 180, 180);
+    if (anyShared || count == 0) {
+        appendTicks(plot->ticks, view, 1, -1, 180, 180, 180);
+    }
     plot->store.releaseRetired();
     return static_cast<int>(plot->points.size());
 }
