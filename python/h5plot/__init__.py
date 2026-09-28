@@ -6,4 +6,13 @@
 from .widget import PlotWidget
 from .lib import Plot
 
-__all__ = ["PlotWidget", "Plot"]
+__all__ = ["PlotWidget", "Plot", "MplView"]
+
+
+def __getattr__(name):
+    # matplotlib is an extra. Importing the window must not require it.
+    if name == "MplView":
+        from .mpl import MplView
+
+        return MplView
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -290,8 +290,10 @@ struct H5Plot
     std::vector<gui::PlotLine> lines;
     gui::PlotAxis axis;
     std::vector<QPointF> points;
+    std::vector<QPointF> dataPoints;
     std::vector<gui::PlotRun> runs;
     std::vector<int> lineRuns;
+    std::vector<int> runLines;
     std::vector<H5PlotRun> painted;
     std::vector<H5PlotTick> ticks;
     int width = 640;
@@ -424,7 +426,9 @@ void h5plot_clear(H5Plot* plot)
     plot->xSpan = 1.0;
     plot->lines.clear();
     plot->points.clear();
+    plot->dataPoints.clear();
     plot->runs.clear();
+    plot->runLines.clear();
     plot->painted.clear();
     plot->ticks.clear();
 }
@@ -679,7 +683,9 @@ int h5plot_project(H5Plot* plot)
     plot->syncExtent();
 
     plot->points.clear();
+    plot->dataPoints.clear();
     plot->runs.clear();
+    plot->runLines.clear();
     plot->painted.clear();
     plot->ticks.clear();
     const auto count = plot->lines.size();
@@ -706,7 +712,11 @@ int h5plot_project(H5Plot* plot)
             anyShared = true;
         }
         plot->lineRuns[i] = static_cast<int>(plot->runs.size());
-        gui::projectLine(line, plot->axis, drawn, plot->points, plot->runs);
+        const int runsBefore = static_cast<int>(plot->runs.size());
+        gui::projectLine(line, plot->axis, drawn, plot->points, plot->runs, &plot->dataPoints);
+        for (int r = runsBefore; r < static_cast<int>(plot->runs.size()); ++r) {
+            plot->runLines.push_back(static_cast<int>(i));
+        }
         const QColor colour = line.colour;
         const auto alpha = static_cast<unsigned char>(
             std::lround(std::clamp(colour.alphaF() * line.opacity, 0.0, 1.0) * 255.0));
@@ -747,6 +757,54 @@ void h5plot_copy_points(const H5Plot* plot, double* xy)
         xy[i * 2] = plot->points[i].x();
         xy[i * 2 + 1] = plot->points[i].y();
     }
+}
+
+void h5plot_copy_data(const H5Plot* plot, double* xy)
+{
+    if (plot == nullptr || xy == nullptr) {
+        return;
+    }
+    for (std::size_t i = 0; i < plot->dataPoints.size(); ++i) {
+        xy[i * 2] = plot->dataPoints[i].x();
+        xy[i * 2 + 1] = plot->dataPoints[i].y();
+    }
+}
+
+void h5plot_copy_run_lines(const H5Plot* plot, int* lines)
+{
+    if (plot == nullptr || lines == nullptr) {
+        return;
+    }
+    for (std::size_t i = 0; i < plot->runLines.size(); ++i) {
+        lines[i] = plot->runLines[i];
+    }
+}
+
+int h5plot_x_log(const H5Plot* plot)
+{
+    return plot != nullptr && plot->camera.xLog() ? 1 : 0;
+}
+
+int h5plot_y_log(const H5Plot* plot)
+{
+    return plot != nullptr && plot->camera.yLog() ? 1 : 0;
+}
+
+void h5plot_line_y_range(const H5Plot* plot, int index, double* low, double* high)
+{
+    if (plot == nullptr || low == nullptr || high == nullptr) {
+        return;
+    }
+    if (index >= 0 && index < static_cast<int>(plot->poses.size()) &&
+        plot->poses[static_cast<std::size_t>(index)].own) {
+        const gui::PlotCamera::Span span =
+            plot->camera.shiftedSpan(plot->poses[static_cast<std::size_t>(index)].shiftY);
+        *low = span.low;
+        *high = span.high;
+        return;
+    }
+    *low = plot->camera.viewMinY();
+    *high = plot->camera.viewMaxY();
 }
 
 int h5plot_run_count(const H5Plot* plot)

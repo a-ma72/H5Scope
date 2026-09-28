@@ -14,6 +14,9 @@ license = "GPL-3.0-only"
 authors = [{ name = "Andreas Martin" }]
 dependencies = ["numpy", "PySide6"]
 
+[project.optional-dependencies]
+matplotlib = ["matplotlib>=3.8"]
+
 [tool.setuptools]
 packages = ["h5plot"]
 

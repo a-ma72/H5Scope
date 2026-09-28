@@ -264,7 +264,8 @@ QPointF uprightPoint(const QPointF& onPane, const PlotView& view)
 }
 
 PlotProjected projectLine(const PlotLine& line, const PlotAxis& axis, const PlotView& view,
-                          std::vector<QPointF>& points, std::vector<PlotRun>& runs)
+                          std::vector<QPointF>& points, std::vector<PlotRun>& runs,
+                          std::vector<QPointF>* data)
 {
     const auto startRuns = static_cast<int>(runs.size());
     const auto added = [&](bool decimated) {
@@ -309,15 +310,21 @@ PlotProjected projectLine(const PlotLine& line, const PlotAxis& axis, const Plot
             // Dropping it keeps the counts honest rather than emitting a
             // vertex pair that rasterises to nothing.
             points.pop_back();
+            if (data != nullptr && !data->empty()) {
+                data->pop_back();
+            }
         }
         open = -1;
     };
-    const auto place = [&](double px, double py) {
+    const auto place = [&](double px, double py, double x, double y) {
         if (open < 0) {
             open = static_cast<int>(points.size());
         }
         points.emplace_back(std::clamp(px, -kFarAway, kFarAway),
                             std::clamp(py, -kFarAway, kFarAway));
+        if (data != nullptr) {
+            data->emplace_back(x, y);
+        }
     };
 
     const auto count = static_cast<std::int64_t>(line.count);
@@ -344,7 +351,7 @@ PlotProjected projectLine(const PlotLine& line, const PlotAxis& axis, const Plot
                 closeRun();
                 continue;
             }
-            place(toX(x), toY(value));
+            place(toX(x), toY(value), x, value);
         }
         closeRun();
         // Every point here was drawn, so nothing was summarised *by this* --
@@ -414,7 +421,7 @@ PlotProjected projectLine(const PlotLine& line, const PlotAxis& axis, const Plot
                 closeRun();
                 continue;
             }
-            place(toX(x), toY(value));
+            place(toX(x), toY(value), x, value);
         }
         closeRun();
         // ...and they are samples only if the model did not summarise them on
@@ -542,15 +549,15 @@ PlotProjected projectLine(const PlotLine& line, const PlotAxis& axis, const Plot
         const double atFirst = toX(xFirst);
         const double atMiddle = toX(xMiddle);
         if (lowIndex == highIndex) {
-            place(atFirst, toY(lowest));
+            place(atFirst, toY(lowest), xFirst, lowest);
         }
         else if (lowIndex < highIndex) {
-            place(atFirst, toY(lowest));
-            place(atMiddle, toY(highest));
+            place(atFirst, toY(lowest), xFirst, lowest);
+            place(atMiddle, toY(highest), xMiddle, highest);
         }
         else {
-            place(atFirst, toY(highest));
-            place(atMiddle, toY(lowest));
+            place(atFirst, toY(highest), xFirst, highest);
+            place(atMiddle, toY(lowest), xMiddle, lowest);
         }
     }
     closeRun();

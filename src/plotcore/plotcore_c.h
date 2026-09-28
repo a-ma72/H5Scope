@@ -149,6 +149,21 @@ H5PLOT_API void h5plot_copy_runs(const H5Plot* plot, H5PlotRun* runs);
 H5PLOT_API int h5plot_tick_count(const H5Plot* plot);
 H5PLOT_API void h5plot_copy_ticks(const H5Plot* plot, H5PlotTick* ticks);
 
+/* The same vertices as h5plot_copy_points, in the data's own units. A run
+ * indexes either buffer. y is the line's value, including a line whose window
+ * was shifted off the common axis. */
+H5PLOT_API void h5plot_copy_data(const H5Plot* plot, double* xy);
+
+/* One entry per run: the line it belongs to. */
+H5PLOT_API void h5plot_copy_run_lines(const H5Plot* plot, int* lines);
+
+H5PLOT_API int h5plot_x_log(const H5Plot* plot);
+H5PLOT_API int h5plot_y_log(const H5Plot* plot);
+
+/* The y window that line is drawn in. The common window, or the shifted one
+ * when the line has an axis of its own. */
+H5PLOT_API void h5plot_line_y_range(const H5Plot* plot, int index, double* low, double* high);
+
 #ifdef __cplusplus
 }
 #endif

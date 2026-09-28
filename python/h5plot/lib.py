@@ -137,6 +137,13 @@ _lib.h5plot_copy_runs.argtypes = [c_void_p, POINTER(H5PlotRun)]
 _lib.h5plot_tick_count.argtypes = [c_void_p]
 _lib.h5plot_tick_count.restype = c_int
 _lib.h5plot_copy_ticks.argtypes = [c_void_p, POINTER(H5PlotTick)]
+_lib.h5plot_copy_data.argtypes = [c_void_p, POINTER(c_double)]
+_lib.h5plot_copy_run_lines.argtypes = [c_void_p, POINTER(c_int)]
+_lib.h5plot_x_log.argtypes = [c_void_p]
+_lib.h5plot_x_log.restype = c_int
+_lib.h5plot_y_log.argtypes = [c_void_p]
+_lib.h5plot_y_log.restype = c_int
+_lib.h5plot_line_y_range.argtypes = [c_void_p, c_int, POINTER(c_double), POINTER(c_double)]
 
 
 class Plot:
@@ -410,3 +417,39 @@ class Plot:
             _lib.h5plot_copy_ticks(self._handle, ticks)
         points = xy.reshape(n, 2) if n else xy.reshape(0, 2)
         return points, list(runs[:runs_n]), list(ticks[:tick_n])
+
+    def data_points(self):
+        """The vertices of the last project(), in the data's own units.
+
+        The same order as the pane pixels, so a run indexes either. y is the
+        line's value. A shifted line is not rewritten onto the common axis.
+        """
+        import numpy as np
+
+        n = int(_lib.h5plot_point_count(self._handle))
+        xy = np.empty(n * 2, dtype=np.float64)
+        if n:
+            _lib.h5plot_copy_data(self._handle, xy.ctypes.data_as(POINTER(c_double)))
+        return xy.reshape(n, 2) if n else xy.reshape(0, 2)
+
+    def run_lines(self):
+        """Which line each run of the last project() belongs to."""
+        import numpy as np
+
+        n = int(_lib.h5plot_run_count(self._handle))
+        lines = np.empty(n, dtype=np.int32)
+        if n:
+            _lib.h5plot_copy_run_lines(self._handle, lines.ctypes.data_as(POINTER(c_int)))
+        return lines
+
+    def x_log(self) -> bool:
+        return bool(_lib.h5plot_x_log(self._handle))
+
+    def y_log(self) -> bool:
+        return bool(_lib.h5plot_y_log(self._handle))
+
+    def line_y_range(self, index: int) -> tuple[float, float]:
+        low = c_double()
+        high = c_double()
+        _lib.h5plot_line_y_range(self._handle, int(index), ctypes.byref(low), ctypes.byref(high))
+        return float(low.value), float(high.value)

@@ -540,8 +540,13 @@ struct PlotProjected
 /// gaps, and append each stroke to `runs`. Both vectors are appended to, so a
 /// set of lines projects into one pair of buffers.
 ///
+/// `data`, when it is set, receives the same vertices in the data's own units
+/// and in the same order, so a run indexes either buffer. The y is the line's
+/// value. A line drawn in a shifted window is not rewritten into the common
+/// one: the window moved, the value did not.
 PlotProjected projectLine(const PlotLine& line, const PlotAxis& axis, const PlotView& view,
-                          std::vector<QPointF>& points, std::vector<PlotRun>& runs);
+                          std::vector<QPointF>& points, std::vector<PlotRun>& runs,
+                          std::vector<QPointF>* data = nullptr);
 
 /// How far a mitred join may reach past the stroke before it is given up.
 ///
