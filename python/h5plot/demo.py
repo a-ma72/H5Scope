@@ -49,7 +49,8 @@ def main() -> int:
     hint = QLabel("Links verschiebt die Ansicht, rechts zieht ein Rechteck "
                   "und nennt den Bereich, den es öffnet. "
                   "Alt oder die mittlere Taste verschiebt die Kurve unter dem Zeiger "
-                  "in Y und gibt ihr eine eigene Achse mit ihrem Namen. Der Zeiger liest den Wert "
+                  "in Y und gibt ihr eine eigene Achse mit ihrem Namen. "
+                  "Strg-Klick legt sie zurück. Der Zeiger liest den Wert "
                   "der nächsten Kurve.")
     hint.setWordWrap(True)
     layout = QVBoxLayout(window)

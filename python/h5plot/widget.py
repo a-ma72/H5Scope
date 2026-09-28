@@ -640,6 +640,17 @@ class PlotWidget(QWidget):
             self.setCursor(Qt.CursorShape.CrossCursor)
             self.update()
             return
+        ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        if event.button() == Qt.MouseButton.LeftButton and ctrl and not alt and self._band is None:
+            # A double-click puts the window back and leaves the shift. This is
+            # the way back for the curve: its axis goes, and so does the offset,
+            # because the common numbers would otherwise name a place it has left.
+            index = self._plot.nearest(*self._pane_point(event.position()))
+            if index >= 0 and self._plot.own_axis(index):
+                self._reading = None
+                self._plot.set_own_axis(index, False)
+                self._reproject()
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._band is None and self._shift is None:
             self._reading = None
             self._drag = event.position()

@@ -221,10 +221,18 @@ class MplView:
         at = self._at(event)
         if at is None:
             return
-        if event.button == 2 or (event.button == 1 and event.key == "alt"):
+        key = event.key or ""
+        alt = "alt" in key and "control" not in key and "ctrl" not in key
+        if event.button == 2 or (event.button == 1 and alt):
             index = self.plot.nearest(at[0], at[1])
             if index >= 0:
                 self._shift = (index, at[1])
+            return
+        if event.button == 1 and ("control" in key or "ctrl" in key):
+            index = self.plot.nearest(at[0], at[1])
+            if index >= 0 and self.plot.own_axis(index):
+                self.plot.set_own_axis(index, False)
+                self.redraw()
             return
         if event.button == 3:
             self._band = (at, at)
