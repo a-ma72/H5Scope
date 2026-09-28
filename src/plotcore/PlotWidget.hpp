@@ -52,7 +52,7 @@ public:
     [[nodiscard]] double yLogBase() const { return camera_.yLogBase(); }
 
     void setDataExtent(double xMin, double xMax, double yMin, double yMax, double xPositiveMin,
-                       double yPositiveMin);
+                       double yPositiveMin, long long samples);
     void resetView();
 
     [[nodiscard]] double viewMinX() const { return camera_.viewMinX(); }

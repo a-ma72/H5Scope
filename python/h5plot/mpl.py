@@ -157,6 +157,8 @@ class MplView:
             # hides the common y axis has to be the one that only hides it.
             self.ax.grid(False, axis="y")
 
+        from .widget import _mark_samples
+
         own_slot = 0
         handles = []
         for line, line_runs in grouped.items():
@@ -192,8 +194,14 @@ class MplView:
                     axes.set_ylabel(name, color=colour)
             else:
                 axes = self.ax
-            drawn, = axes.plot(x, y, color=colour, linewidth=max(float(line_runs[0].width), 0.8),
-                               solid_capstyle="butt")
+            # The same room as the Qt window. The run is wider than the
+            # view, so only the samples the axes are showing are counted.
+            shown = int(np.count_nonzero(np.isfinite(x) & (x >= x0) & (x <= x1)))
+            mark = "o" if _mark_samples(shown, width) else None
+            drawn, = axes.plot(
+                x, y, color=colour, linewidth=max(float(line_runs[0].width), 0.8),
+                solid_capstyle="butt", marker=mark, markersize=5 if mark else 0,
+            )
             self._artists.append(drawn)
             name = self.plot.line_name(line)
             if name:
@@ -419,7 +427,7 @@ class MplView:
         # The number is the sample that was drawn, on the axis that drew it.
         # A shifted line answers in its own y. The hair is that sample's pixel,
         # so it sits on the stroke rather than on the value under the pointer.
-        from .widget import _label
+        from .widget import _reading_number, _y_span
 
         self._clear_reading()
         reading = self.plot.sample(px, py)
@@ -433,7 +441,11 @@ class MplView:
         colour = (reading.red / 255.0, reading.green / 255.0, reading.blue / 255.0)
         self._hair_mark, = self.ax.plot(
             [hx], [hy], marker="+", color=colour, markersize=8, linestyle="none", zorder=6)
-        parts = [_label(reading.x), _label(reading.y)]
+        parts = [
+            _reading_number(reading.x, self.plot.view_max_x() - self.plot.view_min_x(),
+                            self.plot.x_log()),
+            _reading_number(reading.y, _y_span(self.plot, reading.line), self.plot.y_log()),
+        ]
         name = self.plot.line_name(reading.line)
         if name and self.plot.line_count() > 1:
             parts.insert(0, name)

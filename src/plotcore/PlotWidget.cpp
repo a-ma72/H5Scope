@@ -134,9 +134,9 @@ void PlotWidget::setYLogBase(double base)
 }
 
 void PlotWidget::setDataExtent(double xMin, double xMax, double yMin, double yMax,
-                              double xPositiveMin, double yPositiveMin)
+                              double xPositiveMin, double yPositiveMin, long long samples)
 {
-    camera_.setDataExtent(xMin, xMax, yMin, yMax, xPositiveMin, yPositiveMin);
+    camera_.setDataExtent(xMin, xMax, yMin, yMax, xPositiveMin, yPositiveMin, samples);
 }
 
 void PlotWidget::resetView()
@@ -213,7 +213,7 @@ void PlotWidget::refill()
     store_->fillInto(lines, axis);
     setLines(std::move(lines), axis);
     setDataExtent(store_->xMin(), store_->xMax(), store_->minimum(), store_->maximum(),
-                  store_->xPositiveMinimum(), store_->positiveMinimum());
+                  store_->xPositiveMinimum(), store_->positiveMinimum(), store_->length());
     store_->releaseRetired();
     refilling_ = false;
 }

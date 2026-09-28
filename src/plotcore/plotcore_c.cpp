@@ -303,7 +303,7 @@ struct H5Plot
     void syncExtent()
     {
         camera.setDataExtent(store.xMin(), store.xMax(), store.minimum(), store.maximum(),
-                             store.xPositiveMinimum(), store.positiveMinimum());
+                             store.xPositiveMinimum(), store.positiveMinimum(), store.length());
     }
 
     int paneColumns() const

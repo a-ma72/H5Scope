@@ -122,7 +122,7 @@ TEST_CASE("the widget's full view covers the padded data", "[plotcore]")
     store.fillInto(lines, axis);
     widget.setLines(std::move(lines), axis);
     widget.setDataExtent(store.xMin(), store.xMax(), store.minimum(), store.maximum(),
-                         store.xPositiveMinimum(), store.positiveMinimum());
+                         store.xPositiveMinimum(), store.positiveMinimum(), store.length());
     widget.resetView();
 
     REQUIRE(widget.viewMinX() < store.xMin());

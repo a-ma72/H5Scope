@@ -67,12 +67,15 @@ def _log_label(value: float, base: float = 10.0) -> str:
     return lead + "×" + power + _raised(exponent)
 
 
-def _tick_text(tick, x_base: float, y_base: float) -> str:
+def _tick_text(tick, x_base: float, y_base: float, x_span: float, y_span: float) -> str:
     # The value is already a power of the axis base. Writing it in base ten
     # turns 16 into 1.6×10¹, which is not the power the tick is standing on.
+    # A linear tick is judged by the span on screen. Six figures turn two
+    # marks around 100 into the same "100" once the window is narrower than
+    # those figures can say.
     if tick.logarithmic:
         return _log_label(tick.value, x_base if tick.axis == 0 else y_base)
-    return _label(tick.value)
+    return _label_for(tick.value, x_span if tick.axis == 0 else y_span)
 
 
 def _trimmed(text: str) -> str:
@@ -95,6 +98,10 @@ def _trimmed(text: str) -> str:
 def _label_for(value: float, span: float) -> str:
     """A linear tick: enough figures to tell it from the next, judged by the span."""
     width = abs(span)
+    # A padded axis starts a hair below zero. That hair formats as "-0"
+    # once the other ticks are whole numbers, and "-0" is not a reading.
+    if width > 0.0 and abs(value) <= width * 1e-9:
+        value = 0.0
     if width >= 1e6 or (0.0 < width < 1e-4):
         if value == 0.0:
             return "0"
@@ -106,7 +113,13 @@ def _label_for(value: float, span: float) -> str:
     places = 0
     if width > 0.0:
         places = max(0, min(6, math.ceil(-math.log10(width)) + 2))
-    return _trimmed(format(value, f".{places}f"))
+    # The zeros stay. They are the place the next tick differs in, and
+    # taking them off made the round one a coarser number than the ticks
+    # beside it: 24.999, 25, 25.001.
+    text = format(value, f".{places}f")
+    if text.startswith("-") and float(text) == 0.0:
+        text = text[1:]
+    return text
 
 
 def _log_label_for(value: float) -> str:
@@ -124,6 +137,32 @@ def _axis_number(value: float, low: float, high: float, logarithmic: bool) -> st
     if logarithmic:
         return _log_label_for(value)
     return _label_for(value, high - low)
+
+
+def _miss(text: str, value: float) -> float:
+    try:
+        return abs(float(text) - value)
+    except ValueError:
+        return math.inf
+
+
+def _reading_number(value: float, span: float, logarithmic: bool) -> str:
+    """The sample, at least as fine as the ticks around it.
+
+    Six figures turn 100.00002 into "100" once the window is narrower than
+    that. On a wide window the sample keeps its own figures, so 1.25 does
+    not become the "1" a tick at that scale would be.
+    """
+    fine = _label_for(value, span)
+    coarse = _log_label_for(value) if logarithmic else _label(value)
+    return fine if _miss(fine, value) < _miss(coarse, value) else coarse
+
+
+def _y_span(plot, line: int) -> float:
+    if plot.own_axis(line):
+        low, high = plot.line_y_range(line)
+        return high - low
+    return plot.view_max_y() - plot.view_min_y()
 
 
 # The air a band's number keeps from the rectangle, the pane's edge and the
@@ -172,6 +211,16 @@ def _place_beside(box, pane_w, pane_h, avoid):
     if _inside(box, pane_w, pane_h) and all(_clears(box, other) for other in avoid):
         return box
     return None
+
+
+def _mark_samples(on_pane: int, width: int) -> bool:
+    """A sample on the pane gets a mark once it has room of its own.
+
+    The run keeps the samples off either side, so the stroke can enter
+    the pane. Counting those says the samples are packed when the ones
+    on the pane are a screen apart, and the marks never appear.
+    """
+    return on_pane > 0 and width > 0 and on_pane * 8 <= width
 
 
 def _polygon(xy, first: int, count: int, scale: float) -> QPolygonF:
@@ -395,7 +444,11 @@ class PlotWidget(QWidget):
         for tick in self._ticks:
             if not tick.labeled:
                 continue
-            text = _tick_text(tick, self._plot.x_log_base(), self._plot.y_log_base())
+            text = _tick_text(
+                tick, self._plot.x_log_base(), self._plot.y_log_base(),
+                self._plot.view_max_x() - self._plot.view_min_x(),
+                self._plot.view_max_y() - self._plot.view_min_y(),
+            )
             if tick.axis == 0:
                 x = left + int(round(tick.x))
                 painter.drawText(QRect(x - 48, top + height + 2, 96, _BOTTOM - 4),
@@ -435,7 +488,11 @@ class PlotWidget(QWidget):
             painter.drawLine(int(round(hx)), int(round(hy)) - 4, int(round(hx)), int(round(hy)) + 4)
             painter.setPen(ink)
             name = self._plot.line_name(reading.line)
-            parts = [_label(reading.x), _label(reading.y)]
+            parts = [
+                _reading_number(reading.x, self._plot.view_max_x() - self._plot.view_min_x(),
+                                self._plot.x_log()),
+                _reading_number(reading.y, _y_span(self._plot, reading.line), self._plot.y_log()),
+            ]
             if name and self._plot.line_count() > 1:
                 parts.insert(0, name)
             read_right = left + width - 8
@@ -636,6 +693,21 @@ class PlotWidget(QWidget):
                                Qt.PenCapStyle.FlatCap,
                                Qt.PenJoinStyle.MiterJoin if dense else Qt.PenJoinStyle.RoundJoin))
             stroke.drawPolyline(_polygon(self._xy, run.first, run.count, ratio))
+            pts = self._xy[run.first:run.first + run.count]
+            on_pane = int(np.count_nonzero((pts[:, 0] >= 0.0) & (pts[:, 0] <= width)))
+            if _mark_samples(on_pane, width):
+                # The stations off the pane are how the stroke enters it.
+                # A mark belongs on a sample the pane is showing.
+                stroke.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                stroke.setBrush(colour)
+                stroke.setPen(Qt.PenStyle.NoPen)
+                radius = max(2, int(round(3 * ratio)))
+                for px, py in pts:
+                    if px < -4.0 or px > width + 4.0 or py < -4.0 or py > height + 4.0:
+                        continue
+                    x = int(round(float(px) * ratio))
+                    y = int(round(float(py) * ratio))
+                    stroke.drawEllipse(x - radius, y - radius, radius * 2, radius * 2)
         stroke.end()
         return image
 

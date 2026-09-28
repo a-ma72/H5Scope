@@ -17,7 +17,7 @@ bool usableBase(double base)
 } // namespace
 
 void PlotCamera::setDataExtent(double xMin, double xMax, double yMin, double yMax,
-                               double xPositiveMin, double yPositiveMin)
+                               double xPositiveMin, double yPositiveMin, long long samples)
 {
     dataXMin_ = xMin;
     dataXMax_ = xMax;
@@ -25,6 +25,7 @@ void PlotCamera::setDataExtent(double xMin, double xMax, double yMin, double yMa
     dataYMax_ = yMax;
     dataXPositive_ = xPositiveMin;
     dataYPositive_ = yPositiveMin;
+    samples_ = std::max<long long>(samples, 0);
 }
 
 void PlotCamera::setXLog(bool on)
@@ -374,7 +375,12 @@ bool PlotCamera::zoomToRegion(double px0, double py0, double px1, double py1, do
 
 double PlotCamera::maxZoom() const
 {
-    const double length = std::abs(dataXMax_ - dataXMin_) + 1.0;
+    // A handful of samples across the pane. The width of the axis is the
+    // wrong length for that: a few hundred seconds holding two million
+    // samples stopped the zoom while every column was still a stack of
+    // them. PlotSurface.maxZoom counts the elements, and so does this.
+    const double length = samples_ > 1 ? static_cast<double>(samples_)
+                                       : std::abs(dataXMax_ - dataXMin_) + 1.0;
     return std::max(256.0, length / 16.0);
 }
 

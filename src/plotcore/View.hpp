@@ -28,7 +28,7 @@ public:
     static constexpr double kMinimumBand = 12.0;
 
     void setDataExtent(double xMin, double xMax, double yMin, double yMax, double xPositiveMin,
-                       double yPositiveMin);
+                       double yPositiveMin, long long samples);
     void setXLog(bool on);
     void setYLog(bool on);
     void setXLogBase(double base);
@@ -122,6 +122,9 @@ private:
     double dataYMax_ = 1.0;
     double dataXPositive_ = 0.0;
     double dataYPositive_ = 0.0;
+    /// Elements along x. The zoom ceiling is counted in these, not in the
+    /// width of the axis. Zero means the extent itself is the only length.
+    long long samples_ = 0;
     bool xLog_ = false;
     bool yLog_ = false;
     double xLogBase_ = 10.0;

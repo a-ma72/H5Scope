@@ -357,6 +357,18 @@ void LineStore::setVisibleRange(double xMin, double xMax)
         asked_ = true;
         askedMin_ = askedMin;
         askedMax_ = askedMax;
+        // The pane changing throws the closer look away and leaves this
+        // window where it was. Returning here kept the coarse summary,
+        // and a zoom that had already reached the samples drew none of
+        // them: the summary's points sit a bucket apart, and the window
+        // is narrower than that.
+        bool missing = hasAxis_ && !axis_.closerValid;
+        for (const Entry& entry : lines_) {
+            missing = missing || !entry.closerValid;
+        }
+        if (missing) {
+            refreshCloser();
+        }
         return;
     }
     xMin = low;
