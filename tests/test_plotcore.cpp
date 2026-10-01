@@ -20,7 +20,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <span>
+#include <utility>
 #include <vector>
 
 using Catch::Approx;
@@ -264,4 +266,94 @@ TEST_CASE("a rectangle on a logarithmic y takes the same fraction of a scaled li
     const double high = std::log(before.high);
     REQUIRE(fractionOf(std::log(after.low), low, high) == Approx(0.25));
     REQUIRE(fractionOf(std::log(after.high), low, high) == Approx(0.75));
+}
+
+void spanOf(const gui::PlotLine& line, const gui::PlotAxis& axis, double& low, double& high)
+{
+    low = std::numeric_limits<double>::infinity();
+    high = -low;
+    for (qsizetype i = 0; i < line.count; ++i) {
+        const double x = gui::xOf(line, axis, i);
+        if (!std::isfinite(x)) {
+            continue;
+        }
+        low = std::min(low, x);
+        high = std::max(high, x);
+    }
+}
+
+TEST_CASE("a line with its own time is drawn on the shared clock", "[plotcore]")
+{
+    // One clock, two traces that do not share a length. The long one runs
+    // 0..10. The short one is only 5..6, which is the middle of that clock.
+    constexpr int nLong = 10'001;
+    std::vector<double> yLong(static_cast<std::size_t>(nLong), 1.0);
+    std::vector<double> tLong(static_cast<std::size_t>(nLong));
+    for (int i = 0; i < nLong; ++i) {
+        tLong[static_cast<std::size_t>(i)] =
+            10.0 * static_cast<double>(i) / static_cast<double>(nLong - 1);
+    }
+    const std::vector<double> yShort(5, 2.0);
+    const std::vector<double> tShort = {5.0, 5.25, 5.5, 5.75, 6.0};
+    std::vector<double> yShared(11, 3.0);
+    std::vector<double> tShared(11);
+    for (int i = 0; i < 11; ++i) {
+        tShared[static_cast<std::size_t>(i)] = static_cast<double>(i);
+    }
+
+    gui::LineStore store;
+    REQUIRE(store.addLine(yLong.data(), static_cast<qsizetype>(yLong.size())) == 0);
+    REQUIRE(store.addLine(yShort.data(), static_cast<qsizetype>(yShort.size())) == 1);
+    REQUIRE(store.addLine(yShared.data(), static_cast<qsizetype>(yShared.size())) == 2);
+    store.setAxis(tShared.data(), static_cast<qsizetype>(tShared.size()));
+    REQUIRE(store.setLineAxis(0, tLong.data(), static_cast<qsizetype>(tLong.size())));
+    REQUIRE(store.setLineAxis(1, tShort.data(), static_cast<qsizetype>(tShort.size())));
+    // A time that is not this line's length is not a time for it.
+    REQUIRE_FALSE(store.setLineAxis(2, tShort.data(), static_cast<qsizetype>(tShort.size())));
+    REQUIRE(store.xMin() == Approx(0.0));
+    REQUIRE(store.xMax() == Approx(10.0));
+    store.setPaneColumns(256);
+
+    const auto picture = [&](double t0, double t1) {
+        store.setVisibleRange(t0, t1);
+        std::vector<gui::PlotLine> lines;
+        gui::PlotAxis axis;
+        store.fillInto(lines, axis);
+        return std::make_pair(std::move(lines), axis);
+    };
+
+    {
+        const auto drawn = picture(0.0, 10.0);
+        const auto& lines = drawn.first;
+        const auto& axis = drawn.second;
+        double low = 0.0;
+        double high = 0.0;
+        spanOf(lines[1], axis, low, high);
+        REQUIRE(low == Approx(5.0));
+        REQUIRE(high == Approx(6.0));
+        REQUIRE((low + high) / 2.0 == Approx(5.5));
+        spanOf(lines[0], axis, low, high);
+        REQUIRE(low == Approx(0.0).margin(0.05));
+        REQUIRE(high == Approx(10.0).margin(0.05));
+        // No time of its own: the shared axis places it, sample for sample.
+        REQUIRE(lines[2].xs == nullptr);
+        REQUIRE(gui::xOf(lines[2], axis, 0) == Approx(0.0));
+        REQUIRE(gui::xOf(lines[2], axis, lines[2].count - 1) == Approx(10.0));
+    }
+    {
+        const auto drawn = picture(5.0, 6.0);
+        const auto& lines = drawn.first;
+        const auto& axis = drawn.second;
+        double low = 0.0;
+        double high = 0.0;
+        spanOf(lines[1], axis, low, high);
+        REQUIRE(low == Approx(5.0).margin(0.05));
+        REQUIRE(high == Approx(6.0).margin(0.05));
+        spanOf(lines[0], axis, low, high);
+        // The closer run is wider than the window, and it is not the whole line.
+        REQUIRE(high - low < 6.0);
+        REQUIRE(low > 1.0);
+        REQUIRE(low < 5.2);
+        REQUIRE(high > 5.8);
+    }
 }

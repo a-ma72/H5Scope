@@ -9,6 +9,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <utility>
 
 namespace gui {
 namespace {
@@ -117,6 +118,12 @@ void LineStore::finishLine(int index)
     entry.pyramid = entry.building->finish();
     entry.building.reset();
     entry.count = static_cast<qsizetype>(entry.pyramid.length);
+    // The time was accepted against the count beginLine was given. A pyramid
+    // that came back a different length is no longer one sample per time.
+    if (entry.hasTime && entry.time != nullptr &&
+        entry.time->pyramid.length != static_cast<long long>(entry.count)) {
+        dropLineTime(entry);
+    }
     adopt(entry);
 }
 
@@ -253,6 +260,151 @@ void LineStore::setAxisReader(WindowReader reader, void* user)
     axis_.readerUser = user;
 }
 
+void LineStore::retireBuffers(Entry& entry)
+{
+    if (!entry.whole.empty()) {
+        retired_.push_back(std::move(entry.whole));
+    }
+    if (!entry.closer.empty()) {
+        retired_.push_back(std::move(entry.closer));
+    }
+}
+
+void LineStore::dropLineTime(Entry& entry)
+{
+    entry.hasTime = false;
+    if (!entry.placedXs.empty()) {
+        retired_.push_back(std::move(entry.placedXs));
+    }
+    if (entry.time != nullptr) {
+        retireBuffers(*entry.time);
+        entry.time.reset();
+    }
+    // The units this line is drawn in just changed. The window in hand was
+    // matched against the old ones.
+    asked_ = false;
+    dropFolds();
+}
+
+void LineStore::acceptLineTime(Entry& entry)
+{
+    if (entry.time == nullptr) {
+        entry.hasTime = false;
+        emitChanged();
+        return;
+    }
+    Entry& time = *entry.time;
+    const bool fits = time.pyramid.length >= 2 &&
+                      time.pyramid.length == static_cast<long long>(entry.count);
+    if (!fits) {
+        // A time that is not one value per sample of this line would put
+        // sample i at someone else's timestamp.
+        dropLineTime(entry);
+        emitChanged();
+        return;
+    }
+    entry.hasTime = true;
+    rebuildWhole(time);
+    const Extremes extremes = extremesOver(time.pyramid, 0, time.pyramid.length);
+    time.finite = extremes.found();
+    if (time.finite) {
+        time.low = extremes.lowest;
+        time.high = extremes.highest;
+    }
+    asked_ = false;
+    dropFolds();
+    emitChanged();
+}
+
+bool LineStore::setLineAxis(int index, const double* values, qsizetype count)
+{
+    if (index < 0 || index >= lineCount()) {
+        return false;
+    }
+    Entry& entry = lines_[static_cast<std::size_t>(index)];
+    if (values == nullptr || count == 0) {
+        const bool had = entry.hasTime || entry.time != nullptr;
+        dropLineTime(entry);
+        if (had) {
+            emitChanged();
+        }
+        return true;
+    }
+    if (count < 2 || count != entry.count) {
+        return false;
+    }
+    dropLineTime(entry);
+    entry.time = std::make_unique<Entry>();
+    entry.time->values = values;
+    entry.time->count = count;
+    const long long length = static_cast<long long>(count);
+    entry.time->pyramid = pyramidOf(values, length, baseBucketFor(length, kHoldDoubles));
+    acceptLineTime(entry);
+    return entry.hasTime;
+}
+
+bool LineStore::beginLineAxis(int index, long long count)
+{
+    if (index < 0 || index >= lineCount()) {
+        return false;
+    }
+    Entry& entry = lines_[static_cast<std::size_t>(index)];
+    if (count < 2 || count != static_cast<long long>(entry.count)) {
+        return false;
+    }
+    dropLineTime(entry);
+    entry.time = std::make_unique<Entry>();
+    entry.time->count = static_cast<qsizetype>(count);
+    entry.time->building =
+        std::make_unique<PyramidBuilder>(count, baseBucketFor(count, kHoldDoubles));
+    // The old time is already gone. Until finish, this line is on the shared
+    // clock, and the picture has to be asked for again to show that.
+    emitChanged();
+    return true;
+}
+
+void LineStore::addLineAxisSamples(int index, const double* values, long long count)
+{
+    if (index < 0 || index >= lineCount() || values == nullptr || count <= 0) {
+        return;
+    }
+    Entry& entry = lines_[static_cast<std::size_t>(index)];
+    if (entry.time == nullptr || entry.time->building == nullptr) {
+        return;
+    }
+    entry.time->building->add(values, count);
+}
+
+bool LineStore::finishLineAxis(int index)
+{
+    if (index < 0 || index >= lineCount()) {
+        return false;
+    }
+    Entry& entry = lines_[static_cast<std::size_t>(index)];
+    if (entry.time == nullptr || entry.time->building == nullptr) {
+        return false;
+    }
+    entry.time->pyramid = entry.time->building->finish();
+    entry.time->building.reset();
+    entry.time->count = static_cast<qsizetype>(entry.time->pyramid.length);
+    entry.time->values = nullptr;
+    acceptLineTime(entry);
+    return entry.hasTime;
+}
+
+void LineStore::setLineAxisReader(int index, WindowReader reader, void* user)
+{
+    if (index < 0 || index >= lineCount()) {
+        return;
+    }
+    Entry& entry = lines_[static_cast<std::size_t>(index)];
+    if (entry.time == nullptr) {
+        return;
+    }
+    entry.time->reader = reader;
+    entry.time->readerUser = user;
+}
+
 void LineStore::setXLog(bool on)
 {
     if (xLog_ == on) {
@@ -295,22 +447,20 @@ void LineStore::setPaneColumns(int columns)
     }
     cap_ = cap;
     for (Entry& entry : lines_) {
-        if (!entry.whole.empty()) {
-            retired_.push_back(std::move(entry.whole));
-        }
-        if (!entry.closer.empty()) {
-            retired_.push_back(std::move(entry.closer));
-        }
+        retireBuffers(entry);
         entry.closerValid = false;
         rebuildWhole(entry);
+        if (entry.time != nullptr) {
+            retireBuffers(*entry.time);
+            entry.time->closerValid = false;
+            rebuildWhole(*entry.time);
+        }
+        if (!entry.placedXs.empty()) {
+            retired_.push_back(std::move(entry.placedXs));
+        }
     }
     if (hasAxis_) {
-        if (!axis_.whole.empty()) {
-            retired_.push_back(std::move(axis_.whole));
-        }
-        if (!axis_.closer.empty()) {
-            retired_.push_back(std::move(axis_.closer));
-        }
+        retireBuffers(axis_);
         axis_.closerValid = false;
         rebuildWhole(axis_);
     }
@@ -353,7 +503,14 @@ void LineStore::setVisibleRange(double xMin, double xMax)
             high = static_cast<double>(std::max(axis_.pyramid.length, length_));
         }
     }
-    if (viewMin_ == low && viewMax_ == high) {
+    // A line with its own time does not share this index window. The time
+    // window can move while the shared indices stay, and that line still
+    // has a new run to fold.
+    bool ownTime = false;
+    for (const Entry& entry : lines_) {
+        ownTime = ownTime || entry.hasTime;
+    }
+    if (viewMin_ == low && viewMax_ == high && !ownTime) {
         asked_ = true;
         askedMin_ = askedMin;
         askedMax_ = askedMax;
@@ -365,6 +522,7 @@ void LineStore::setVisibleRange(double xMin, double xMax)
         bool missing = hasAxis_ && !axis_.closerValid;
         for (const Entry& entry : lines_) {
             missing = missing || !entry.closerValid;
+            missing = missing || (entry.hasTime && entry.time != nullptr && !entry.time->closerValid);
         }
         if (missing) {
             refreshCloser();
@@ -373,25 +531,36 @@ void LineStore::setVisibleRange(double xMin, double xMax)
     }
     xMin = low;
     xMax = high;
-    const auto previous = [this]() -> std::optional<PlotWindow> {
-        if (lines_.empty() || !lines_.front().closerValid) {
-            return std::nullopt;
-        }
-        return lines_.front().closerWindow;
+    // One shared window used to stand for every line. A line with its own
+    // time folds a different index run, so the first line changing is not
+    // the question any more.
+    const auto snap = [](const Entry& entry) {
+        return std::pair<bool, PlotWindow>{entry.closerValid, entry.closerWindow};
     };
-    const std::optional<PlotWindow> before = previous();
-    const bool axisBefore = hasAxis_ && axis_.closerValid;
-    const PlotWindow axisWindowBefore = axis_.closerWindow;
+    std::vector<std::pair<bool, PlotWindow>> before;
+    std::vector<std::pair<bool, PlotWindow>> beforeTime;
+    before.reserve(lines_.size());
+    beforeTime.reserve(lines_.size());
+    for (const Entry& entry : lines_) {
+        before.push_back(snap(entry));
+        beforeTime.push_back(entry.time != nullptr ? snap(*entry.time)
+                                                   : std::pair<bool, PlotWindow>{});
+    }
+    const auto beforeAxis = snap(axis_);
     viewMin_ = xMin;
     viewMax_ = xMax;
     asked_ = true;
     askedMin_ = askedMin;
     askedMax_ = askedMax;
     refreshCloser();
-    const std::optional<PlotWindow> after = previous();
-    const bool axisAfter = hasAxis_ && axis_.closerValid;
-    if (after != before || axisBefore != axisAfter ||
-        (axisAfter && axis_.closerWindow != axisWindowBefore)) {
+    bool changed = snap(axis_) != beforeAxis;
+    for (std::size_t i = 0; i < lines_.size(); ++i) {
+        changed = changed || snap(lines_[i]) != before[i];
+        const auto nowTime = lines_[i].time != nullptr ? snap(*lines_[i].time)
+                                                       : std::pair<bool, PlotWindow>{};
+        changed = changed || nowTime != beforeTime[i];
+    }
+    if (changed) {
         emitChanged();
     }
 }
@@ -399,6 +568,13 @@ void LineStore::setVisibleRange(double xMin, double xMax)
 void LineStore::fillInto(std::vector<PlotLine>& lines, PlotAxis& axis)
 {
     refreshLogFold();
+    // A logarithmic fold already stated its own x. The linear fold of a line
+    // with its own time still has to: the shared axis is a different index.
+    for (Entry& entry : lines_) {
+        if (entry.hasTime && !entry.foldValid) {
+            placeOwnTimes(entry);
+        }
+    }
     lines.clear();
     lines.reserve(lines_.size());
     for (const Entry& entry : lines_) {
@@ -466,17 +642,57 @@ void LineStore::rebuildWhole(Entry& entry)
 
 void LineStore::refreshCloser()
 {
-    if (lines_.empty() || length_ <= 0) {
+    if (lines_.empty()) {
         return;
     }
-    const long long domain = hasAxis_ && axis_.pyramid.length > 0 ? axis_.pyramid.length : length_;
-    const std::optional<PlotWindow> wanted = windowFor(viewMin_, viewMax_, domain, cap_ / 2);
+    // Lines on the shared clock share one index run. A line with its own
+    // time is the same camera window inverted through that time, so a short
+    // trace and a long one zoom together without sharing a length.
+    std::optional<PlotWindow> shared;
+    if (length_ > 0) {
+        const long long domain =
+            hasAxis_ && axis_.pyramid.length > 0 ? axis_.pyramid.length : length_;
+        shared = windowFor(viewMin_, viewMax_, domain, cap_ / 2);
+    }
     for (Entry& entry : lines_) {
-        refreshEntry(entry, wanted);
+        if (entry.hasTime && entry.time != nullptr) {
+            double low = 0.0;
+            double high = 0.0;
+            std::optional<PlotWindow> own;
+            if (indexSpan(*entry.time, askedMin_, askedMax_, low, high)) {
+                const long long length = entry.time->pyramid.length > 0
+                                             ? entry.time->pyramid.length
+                                             : static_cast<long long>(entry.count);
+                own = windowFor(low, high, length, cap_ / 2);
+            }
+            refreshEntry(entry, own);
+            refreshEntry(*entry.time, own);
+        } else {
+            refreshEntry(entry, shared);
+        }
     }
     if (hasAxis_) {
-        refreshEntry(axis_, wanted);
+        refreshEntry(axis_, shared);
     }
+}
+
+bool LineStore::indexSpan(Entry& time, double t0, double t1, double& low, double& high)
+{
+    double first = 0.0;
+    double second = 0.0;
+    double firstResolution = 1.0;
+    double secondResolution = 1.0;
+    if (!positionOf(time, t0, first, firstResolution) ||
+        !positionOf(time, t1, second, secondResolution)) {
+        return false;
+    }
+    if (first > second) {
+        std::swap(first, second);
+        std::swap(firstResolution, secondResolution);
+    }
+    low = first - firstResolution;
+    high = second + secondResolution;
+    return true;
 }
 
 void LineStore::refreshEntry(Entry& entry, const std::optional<PlotWindow>& wanted)
@@ -632,13 +848,13 @@ void LineStore::dropFolds()
     logEdges_.clear();
 }
 
-double LineStore::timeAt(long long at) const
+double LineStore::timeAt(const Entry& time, long long at) const
 {
-    const LinePyramid& time = axis_.pyramid;
-    if (time.empty() || at < 0 || at >= time.length) {
+    const LinePyramid& pyramid = time.pyramid;
+    if (pyramid.empty() || at < 0 || at >= pyramid.length) {
         return std::numeric_limits<double>::quiet_NaN();
     }
-    const PyramidLevel& bottom = time.levels.front();
+    const PyramidLevel& bottom = pyramid.levels.front();
     if (bottom.bucket == 1) {
         return bottom.values[static_cast<std::size_t>(at)];
     }
@@ -647,25 +863,25 @@ double LineStore::timeAt(long long at) const
     return bottom.values[static_cast<std::size_t>(at / bottom.bucket) * 2];
 }
 
-bool LineStore::timeEdges(const LogColumns& columns, std::vector<double>& out) const
+bool LineStore::timeEdges(const Entry& time, const LogColumns& columns, std::vector<double>& out) const
 {
     out.clear();
-    if (axis_.pyramid.empty() || columns.density <= 0) {
+    if (time.pyramid.empty() || columns.density <= 0) {
         return false;
     }
-    const std::vector<double>& bottom = axis_.pyramid.levels.front().values;
+    const std::vector<double>& bottom = time.pyramid.levels.front().values;
     const bool ascending = std::is_sorted(bottom.begin(), bottom.end());
     const bool descending = !ascending && std::is_sorted(bottom.rbegin(), bottom.rend());
     if (!ascending && !descending) {
         return false;
     }
-    const long long length = axis_.pyramid.length;
+    const long long length = time.pyramid.length;
     const auto before = [&](double x) {
         long long low = 0;
         long long high = length;
         while (low < high) {
             const long long mid = low + (high - low) / 2;
-            const double t = timeAt(mid);
+            const double t = timeAt(time, mid);
             if (ascending ? t < x : t >= x) {
                 low = mid + 1;
             } else {
@@ -704,33 +920,53 @@ void LineStore::refreshLogFold()
                       logColumnsServe(*logColumns_, askedMin_, askedMax_, columns_);
     if (!same) {
         dropFolds();
-        std::vector<double> edges;
+        logColumns_ = *wanted;
+        logEdges_.clear();
+        // The column grid is one, in time. The index edges are not: a line
+        // with its own time is bisected on its own. These are the edges of
+        // the lines that still share the clock.
         if (hasAxis_) {
-            if (!timeEdges(*wanted, edges)) {
-                return;
+            if (!timeEdges(axis_, *wanted, logEdges_)) {
+                logEdges_.clear();
             }
         } else {
-            edgesAlong(*wanted, 0.0, 1.0, edges);
+            bool untimed = false;
+            for (const Entry& entry : lines_) {
+                untimed = untimed || !entry.hasTime;
+            }
+            if (untimed) {
+                edgesAlong(*wanted, 0.0, 1.0, logEdges_);
+            }
         }
-        if (edges.size() < 2) {
-            return;
-        }
-        logColumns_ = *wanted;
-        logEdges_ = std::move(edges);
     }
-    if (!logColumns_.has_value() || logEdges_.size() < 2) {
+    if (!logColumns_.has_value()) {
         return;
     }
     for (Entry& entry : lines_) {
         if (entry.foldValid || entry.pyramid.empty()) {
             continue;
         }
+        std::vector<double> ownEdges;
+        const std::vector<double>* edges = &logEdges_;
+        const Entry* time = hasAxis_ ? &axis_ : nullptr;
+        if (entry.hasTime && entry.time != nullptr) {
+            if (!timeEdges(*entry.time, *logColumns_, ownEdges) || ownEdges.size() < 2) {
+                // Not a map. The linear fold places this line by the times
+                // it does have, rather than stretching an index across the
+                // pane.
+                continue;
+            }
+            edges = &ownEdges;
+            time = entry.time.get();
+        } else if (edges->size() < 2) {
+            continue;
+        }
         ColumnFold folded;
-        foldColumns(entry.pyramid, logEdges_, folded);
+        foldColumns(entry.pyramid, *edges, folded);
         std::vector<double> xs(folded.positions.size());
         for (std::size_t i = 0; i < xs.size(); ++i) {
             const double at = folded.positions[i];
-            xs[i] = hasAxis_ ? timeAt(std::llround(at)) : at;
+            xs[i] = time != nullptr ? timeAt(*time, std::llround(at)) : at;
         }
         entry.foldValues = std::move(folded.values);
         entry.foldXs = std::move(xs);
@@ -757,25 +993,148 @@ PlotLine LineStore::lineOf(const Entry& entry) const
         line.positionStart = static_cast<double>(entry.closerWindow.first);
         line.positionStep = entry.closerStep;
         line.summarised = entry.closerWindow.bucket > 1;
-        return line;
+    } else if (!entry.whole.empty()) {
+        line.values = entry.whole.data();
+        line.count = static_cast<qsizetype>(entry.whole.size());
+        line.positionStep = entry.wholeStep;
+        line.summarised = entry.wholeSummarised;
     }
-    if (entry.whole.empty()) {
-        return line;
+    // Stated x wins over the shared axis. xOf reads xs and never the position.
+    if (entry.hasTime && line.values != nullptr &&
+        static_cast<qsizetype>(entry.placedXs.size()) == line.count) {
+        line.xs = entry.placedXs.data();
     }
-    line.values = entry.whole.data();
-    line.count = static_cast<qsizetype>(entry.whole.size());
-    line.positionStep = entry.wholeStep;
-    line.summarised = entry.wholeSummarised;
     return line;
+}
+
+void LineStore::placeOwnTimes(Entry& entry)
+{
+    if (!entry.hasTime || entry.time == nullptr) {
+        if (!entry.placedXs.empty()) {
+            retired_.push_back(std::move(entry.placedXs));
+        }
+        return;
+    }
+    const Entry& time = *entry.time;
+    const std::vector<double>* values = nullptr;
+    const std::vector<double>* source = nullptr;
+    double start = 0.0;
+    double step = 1.0;
+    if (entry.closerValid && !entry.closer.empty()) {
+        values = &entry.closer;
+        start = static_cast<double>(entry.closerWindow.first);
+        step = entry.closerStep;
+        // The same index window, so each drawn y is the time of that station.
+        // Below the pyramid's base that is a read timeAt cannot see.
+        if (time.closerValid && time.closerWindow == entry.closerWindow &&
+            time.closer.size() == entry.closer.size()) {
+            source = &time.closer;
+        }
+    } else if (!entry.whole.empty()) {
+        values = &entry.whole;
+        step = entry.wholeStep;
+        if (time.whole.size() == entry.whole.size() && time.wholeStep == entry.wholeStep) {
+            source = &time.whole;
+        }
+    }
+    if (values == nullptr) {
+        if (!entry.placedXs.empty()) {
+            retired_.push_back(std::move(entry.placedXs));
+        }
+        return;
+    }
+    std::vector<double> xs;
+    if (source != nullptr) {
+        xs = *source;
+    } else {
+        xs.resize(values->size());
+        for (std::size_t i = 0; i < xs.size(); ++i) {
+            const double at = start + static_cast<double>(i) * step;
+            xs[i] = timeAt(time, std::llround(at));
+        }
+    }
+    if (xs == entry.placedXs) {
+        return;
+    }
+    if (!entry.placedXs.empty()) {
+        retired_.push_back(std::move(entry.placedXs));
+    }
+    entry.placedXs = std::move(xs);
+}
+
+bool LineStore::timeExtent(double& low, double& high) const
+{
+    bool any = false;
+    const auto take = [&](const Entry& time) {
+        if (!time.finite) {
+            return;
+        }
+        if (!any) {
+            low = time.low;
+            high = time.high;
+            any = true;
+        } else {
+            low = std::min(low, time.low);
+            high = std::max(high, time.high);
+        }
+    };
+    if (hasAxis_) {
+        take(axis_);
+    }
+    for (const Entry& entry : lines_) {
+        if (entry.hasTime && entry.time != nullptr) {
+            take(*entry.time);
+        }
+    }
+    return any;
+}
+
+double LineStore::xMin() const
+{
+    double low = 0.0;
+    double high = 0.0;
+    if (timeExtent(low, high)) {
+        return low;
+    }
+    return 0.0;
+}
+
+double LineStore::xMax() const
+{
+    double low = 0.0;
+    double high = 0.0;
+    if (timeExtent(low, high)) {
+        return high;
+    }
+    return length_ > 1 ? static_cast<double>(length_ - 1) : 1.0;
 }
 
 double LineStore::xPositiveMinimum() const
 {
-    if (hasAxis_) {
-        double positive = 0.0;
-        if (smallestPositive(axis_.pyramid, positive)) {
-            return positive;
+    double positive = 0.0;
+    bool any = false;
+    bool timed = hasAxis_;
+    const auto take = [&](const Entry& time) {
+        double value = 0.0;
+        if (!smallestPositive(time.pyramid, value)) {
+            return;
         }
+        positive = any ? std::min(positive, value) : value;
+        any = true;
+    };
+    if (hasAxis_) {
+        take(axis_);
+    }
+    for (const Entry& entry : lines_) {
+        if (entry.hasTime && entry.time != nullptr) {
+            timed = true;
+            take(*entry.time);
+        }
+    }
+    if (any) {
+        return positive;
+    }
+    if (timed) {
         return 0.0;
     }
     return length_ > 1 ? 1.0 : 0.0;

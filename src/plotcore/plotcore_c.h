@@ -70,8 +70,25 @@ H5PLOT_API void h5plot_finish_line(H5Plot* plot, int index);
 typedef int (*H5PlotRead)(void* user, long long first, long long count, double* out);
 H5PLOT_API void h5plot_set_reader(H5Plot* plot, int index, H5PlotRead read, void* user);
 
-/* Shared x, borrowed. n < 2 clears it and x is the sample index again. */
+/* Shared x, borrowed. n < 2 clears it and x is the sample index again.
+ * A line can name a time of its own; this is the clock the others use. */
 H5PLOT_API void h5plot_set_axis(H5Plot* plot, const double* x, long long n);
+
+/* This line's own time, borrowed. The numbered x stays one window, and the
+ * line is drawn where its timestamps fall in it. n must be this line's
+ * length and at least 2; anything else changes nothing and returns 0.
+ * n of 0, or a null buffer, clears it and the line returns to the shared
+ * clock. Returns 1 when the time is set or cleared. */
+H5PLOT_API int h5plot_set_line_axis(H5Plot* plot, int index, const double* x, long long n);
+
+/* The same time, one read at a time. Not in the picture until finish.
+ * begin returns 0 unless n is this line's length and at least 2. finish
+ * returns 0 when the time was not accepted. The reader is asked when a
+ * closer look is finer than the pyramid, and writes `count` doubles. */
+H5PLOT_API int h5plot_begin_line_axis(H5Plot* plot, int index, long long n);
+H5PLOT_API void h5plot_add_line_axis_samples(H5Plot* plot, int index, const double* x, long long n);
+H5PLOT_API int h5plot_finish_line_axis(H5Plot* plot, int index);
+H5PLOT_API void h5plot_set_line_axis_reader(H5Plot* plot, int index, H5PlotRead read, void* user);
 
 /* The same axis, one read at a time. Not in the picture until finish.
  * The samples need not outlive add_axis_samples. The reader is asked when

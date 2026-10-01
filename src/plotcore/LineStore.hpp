@@ -72,7 +72,8 @@ public:
     /// the numbers on the axis are those values. It has to go one way: a range
     /// of x is then a range of positions, and the closer look the index axis
     /// already takes follows. One that doubles back is not that map, and a
-    /// zoom stretches the whole-line summary.
+    /// zoom stretches the whole-line summary. A line can name a time of its
+    /// own; this is the clock the lines that did not are drawn against.
     void setAxis(const double* values, qsizetype count);
 
     /// The same axis, arriving in pieces. `setAxis` wants the whole buffer.
@@ -83,6 +84,26 @@ public:
     void addAxisSamples(const double* values, long long count);
     void finishAxis();
     void setAxisReader(WindowReader reader, void* user);
+
+    /// This line's own time, borrowed like the shared axis.
+    ///
+    /// The numbered x stays one window. The line is drawn where its own
+    /// timestamps fall in that window, and a zoom is the same window turned
+    /// into this line's indices. The count has to be this line's: index i of
+    /// the time is sample i. A different length is not a time for this line,
+    /// and it changes nothing — the line stays on the shared clock. A count
+    /// of 0 clears the own time and puts the line back there. It has to go
+    /// one way, for the shared axis's reason. A time that doubles back is
+    /// drawn, and a zoom stretches the summary.
+    bool setLineAxis(int index, const double* values, qsizetype count);
+
+    /// The same time, arriving in pieces. `count` is refused unless it is
+    /// this line's length and at least two. The line stays on the shared
+    /// clock until `finishLineAxis`.
+    bool beginLineAxis(int index, long long count);
+    void addLineAxisSamples(int index, const double* values, long long count);
+    bool finishLineAxis(int index);
+    void setLineAxisReader(int index, WindowReader reader, void* user);
 
     /// Whether x is logarithmic. The fold changes with it: a window of an
     /// octave or more is folded per column, because a bucket of elements is
@@ -112,14 +133,8 @@ public:
     [[nodiscard]] int paneColumns() const { return columns_; }
     [[nodiscard]] long long length() const { return length_; }
 
-    [[nodiscard]] double xMin() const { return hasAxis_ && axis_.finite ? axis_.low : 0.0; }
-    [[nodiscard]] double xMax() const
-    {
-        if (hasAxis_ && axis_.finite) {
-            return axis_.high;
-        }
-        return length_ > 1 ? static_cast<double>(length_ - 1) : 1.0;
-    }
+    [[nodiscard]] double xMin() const;
+    [[nodiscard]] double xMax() const;
     [[nodiscard]] double xPositiveMinimum() const;
     [[nodiscard]] double minimum() const { return minimum_; }
     [[nodiscard]] double maximum() const { return maximum_; }
@@ -152,23 +167,45 @@ private:
         void* readerUser = nullptr;
         double low = 0.0;
         double high = 1.0;
+
+        /// This line's time, when it has one. A value member would be the
+        /// type containing itself. Absent, or a length other than this
+        /// line's, and the line is drawn on the shared axis.
+        std::unique_ptr<Entry> time;
+        bool hasTime = false;
+
+        /// x of each drawn y, when the line names its own time. Borrowed
+        /// into PlotLine::xs. The shared axis is a different index, so a
+        /// position on it would name the wrong sample.
+        std::vector<double> placedXs;
     };
 
     [[nodiscard]] int pointsFor() const;
     void adopt(Entry& entry);
     void dropAxis();
     void acceptAxis();
+    void dropLineTime(Entry& entry);
+    void acceptLineTime(Entry& entry);
+    void retireBuffers(Entry& entry);
     void rebuildWhole(Entry& entry);
     void refreshCloser();
     void refreshLogFold();
     void dropFolds();
-    [[nodiscard]] double timeAt(long long at) const;
-    [[nodiscard]] bool timeEdges(const LogColumns& columns, std::vector<double>& out) const;
+    [[nodiscard]] double timeAt(const Entry& time, long long at) const;
+    [[nodiscard]] bool timeEdges(const Entry& time, const LogColumns& columns,
+                                 std::vector<double>& out) const;
+    /// The index run of `time` that `t0`..`t1` covers. False when the time
+    /// is not a map; the caller then keeps the whole-line summary.
+    [[nodiscard]] bool indexSpan(Entry& time, double t0, double t1, double& low, double& high);
     void refreshEntry(Entry& entry, const std::optional<PlotWindow>& wanted);
     [[nodiscard]] bool readWindow(Entry& entry, const PlotWindow& window,
                                   std::vector<double>& folded);
     [[nodiscard]] bool positionOf(Entry& entry, double x, double& position, double& resolution);
+    void placeOwnTimes(Entry& entry);
     void recount();
+    /// The union of the shared axis and every line's own time. False when
+    /// there is no time at all, and x is the sample index.
+    [[nodiscard]] bool timeExtent(double& low, double& high) const;
     [[nodiscard]] PlotLine lineOf(const Entry& entry) const;
     void emitChanged();
 

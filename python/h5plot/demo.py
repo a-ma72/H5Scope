@@ -1,7 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Andreas Martin
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Three million-point curves, one of them with a one-sample spike.
+"""Three million-point curves on one clock, and a short burst on its own.
+
+One of the long curves carries a one-sample spike. The burst is a different
+length and only exists between 240 s and 260 s, so it sits in the middle of
+the shared axis.
 
 Build the DLL first:  python\\h5plot\\build.bat
 Then:  C:\\Pythonuser\\venv\\Py311-EISB1\\Scripts\\python.exe python\\h5plot\\demo.py
@@ -41,6 +45,11 @@ def main() -> int:
     sine[n // 2] = 8.0
     cosine = 0.65 * np.cos(2.0 * np.pi * sample / 9000.0)
     slow = 0.35 * np.sin(2.0 * np.pi * sample / 1500.0) + 0.2
+    # Eighty thousand samples across twenty seconds. Not a slice of `time`:
+    # its own timestamps, so the curve is drawn where those seconds are.
+    burst_n = 80_000
+    burst_t = np.linspace(240.0, 260.0, burst_n)
+    burst = 1.2 * np.sin(2.0 * np.pi * np.linspace(0.0, 30.0, burst_n))
 
     window = QWidget()
     window.setWindowTitle("h5plot demo")
@@ -77,7 +86,8 @@ def main() -> int:
                   "in Y und gibt ihr eine eigene Achse mit ihrem Namen. "
                   "Alt+Strg und das Rad skalieren nur diese Kurve in Y. "
                   "Strg-Klick legt sie zurück. Der Zeiger liest den Wert "
-                  "der nächsten Kurve.")
+                  "der nächsten Kurve. pulse hat eine eigene Zeit und liegt "
+                  "nur zwischen 240 s und 260 s.")
     hint.setWordWrap(True)
     layout = QVBoxLayout(window)
     layout.setContentsMargins(0, 0, 0, 0)
@@ -89,6 +99,7 @@ def main() -> int:
     plot.add_line(sine, name="sine")
     plot.add_line(cosine, name="cosine")
     plot.add_line(slow, name="slow")
+    plot.set_line_x(plot.add_line(burst, name="pulse"), burst_t)
     
     window.show()
     return app.exec()

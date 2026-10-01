@@ -418,6 +418,56 @@ void h5plot_set_axis_reader(H5Plot* plot, H5PlotRead read, void* user)
     }
 }
 
+int h5plot_set_line_axis(H5Plot* plot, int index, const double* x, long long n)
+{
+    if (plot == nullptr) {
+        return 0;
+    }
+    const bool ok =
+        plot->store.setLineAxis(index, x, static_cast<qsizetype>(std::max<long long>(n, 0)));
+    if (!ok) {
+        return 0;
+    }
+    plot->syncExtent();
+    plot->camera.reset();
+    return 1;
+}
+
+int h5plot_begin_line_axis(H5Plot* plot, int index, long long n)
+{
+    if (plot == nullptr) {
+        return 0;
+    }
+    return plot->store.beginLineAxis(index, n) ? 1 : 0;
+}
+
+void h5plot_add_line_axis_samples(H5Plot* plot, int index, const double* x, long long n)
+{
+    if (plot != nullptr) {
+        plot->store.addLineAxisSamples(index, x, n);
+    }
+}
+
+int h5plot_finish_line_axis(H5Plot* plot, int index)
+{
+    if (plot == nullptr) {
+        return 0;
+    }
+    if (!plot->store.finishLineAxis(index)) {
+        return 0;
+    }
+    plot->syncExtent();
+    plot->camera.reset();
+    return 1;
+}
+
+void h5plot_set_line_axis_reader(H5Plot* plot, int index, H5PlotRead read, void* user)
+{
+    if (plot != nullptr) {
+        plot->store.setLineAxisReader(index, read, user);
+    }
+}
+
 void h5plot_clear(H5Plot* plot)
 {
     if (plot == nullptr) {

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Andreas Martin
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The same three curves, drawn by matplotlib.
+"""The same curves, drawn by matplotlib, including the burst on its own time.
 
 The fold is the one the Qt window uses. Matplotlib draws that envelope and
 numbers the axes itself. The toolbar stays off.
@@ -11,7 +11,8 @@ numbers the axes itself. The toolbar stays off.
 Scroll zooms, Shift scrolls x, Ctrl scrolls y. The left button pans,
 the right button pulls a rectangle and names the window it will open.
 The pointer reads the nearest drawn sample. Log x and Log y sit under
-the axes, and the base beside them numbers the powers.
+the axes, and the base beside them numbers the powers. The pulse is a
+different length and only exists between 240 s and 260 s.
 Alt or the middle button shifts the curve under the pointer onto an axis
 of its own. Alt+Ctrl and the wheel scale only that curve in y.
 Ctrl-click puts it back. A double-click resets the window.
@@ -41,6 +42,9 @@ def main() -> int:
     sine[n // 2] = 8.0
     cosine = 0.65 * np.cos(2.0 * np.pi * sample / 9000.0)
     slow = 0.35 * np.sin(2.0 * np.pi * sample / 1500.0) + 0.2
+    burst_n = 80_000
+    burst_t = np.linspace(240.0, 260.0, burst_n)
+    burst = 1.2 * np.sin(2.0 * np.pi * np.linspace(0.0, 30.0, burst_n))
 
     view = MplView()
     view.figure.set_size_inches(10, 5.5)
@@ -52,6 +56,7 @@ def main() -> int:
     view.plot.add_line(sine, name="sine")
     view.plot.add_line(cosine, name="cosine")
     view.plot.add_line(slow, name="slow")
+    view.plot.set_line_x(view.plot.add_line(burst, name="pulse"), burst_t)
     view.show()
     return 0
 

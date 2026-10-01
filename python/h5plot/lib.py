@@ -87,6 +87,14 @@ _lib.h5plot_finish_line.argtypes = [c_void_p, c_int]
 _READ = ctypes.CFUNCTYPE(c_int, c_void_p, c_longlong, c_longlong, POINTER(c_double))
 _lib.h5plot_set_reader.argtypes = [c_void_p, c_int, _READ, c_void_p]
 _lib.h5plot_set_axis.argtypes = [c_void_p, POINTER(c_double), c_longlong]
+_lib.h5plot_set_line_axis.argtypes = [c_void_p, c_int, POINTER(c_double), c_longlong]
+_lib.h5plot_set_line_axis.restype = c_int
+_lib.h5plot_begin_line_axis.argtypes = [c_void_p, c_int, c_longlong]
+_lib.h5plot_begin_line_axis.restype = c_int
+_lib.h5plot_add_line_axis_samples.argtypes = [c_void_p, c_int, POINTER(c_double), c_longlong]
+_lib.h5plot_finish_line_axis.argtypes = [c_void_p, c_int]
+_lib.h5plot_finish_line_axis.restype = c_int
+_lib.h5plot_set_line_axis_reader.argtypes = [c_void_p, c_int, _READ, c_void_p]
 _lib.h5plot_begin_axis.argtypes = [c_void_p, c_longlong]
 _lib.h5plot_add_axis_samples.argtypes = [c_void_p, POINTER(c_double), c_longlong]
 _lib.h5plot_finish_axis.argtypes = [c_void_p]
@@ -162,6 +170,7 @@ class Plot:
         self._names: list = []
         self._colours: list = []
         self._x = None
+        self._line_x: dict = {}
         self._sources: dict = {}
         self._tokens: dict = {}
         self._read_cb = _READ(self._read_window)
@@ -178,6 +187,7 @@ class Plot:
         self._names.clear()
         self._colours.clear()
         self._x = None
+        self._line_x.clear()
 
     def __del__(self) -> None:
         self.close()
@@ -246,6 +256,79 @@ class Plot:
         token = (self, "x")
         self._tokens["x"] = token
         _lib.h5plot_set_axis_reader(self._handle, self._read_cb, c_void_p(id(token)))
+
+    def set_line_x(self, index: int, x) -> None:
+        """This line's own time. None puts the line back on the shared x.
+
+        One value per sample of this line, and at least two. A different
+        length is refused: index i of the time is sample i. The numbered x
+        stays one window, and the line is drawn where its timestamps fall
+        in it. The array has to go one way, as with `set_x`.
+        """
+        import numpy as np
+
+        index = int(index)
+        if x is None:
+            _lib.h5plot_set_line_axis(self._handle, index, None, 0)
+            self._drop_line_x(index)
+            return
+        array = np.ascontiguousarray(x, dtype=np.float64)
+        # The previous buffer stays alive until this returns: the store drops
+        # its borrow inside the call, and only then may the old array go.
+        if not _lib.h5plot_set_line_axis(
+            self._handle, index, array.ctypes.data_as(POINTER(c_double)), array.size
+        ):
+            raise ValueError("x must have one sample per value of this line, and at least two")
+        self._drop_line_x(index)
+        self._line_x[index] = array
+
+    def set_line_x_hdf5(self, index: int, path, dataset: str) -> None:
+        """Stream a 1-D numeric dataset in as this line's own time.
+
+        Folded in the same pieces as `set_x_hdf5`. The length has to be this
+        line's. The file stays open so a closer look can read that window back.
+        """
+        import h5py
+        import numpy as np
+
+        index = int(index)
+        handle = h5py.File(path, "r")
+        started = False
+        try:
+            data = handle[dataset]
+            if getattr(data, "ndim", None) != 1 or not np.issubdtype(data.dtype, np.number):
+                raise ValueError(f"{dataset} is not a 1-D numeric dataset")
+            count = int(data.shape[0])
+            if not _lib.h5plot_begin_line_axis(self._handle, index, count):
+                raise ValueError("x must have one sample per value of this line, and at least two")
+            started = True
+            step = 1 << 16
+            for start in range(0, count, step):
+                block = np.ascontiguousarray(data[start:start + step], dtype=np.float64)
+                _lib.h5plot_add_line_axis_samples(
+                    self._handle, index, block.ctypes.data_as(POINTER(c_double)), int(block.size)
+                )
+            if not _lib.h5plot_finish_line_axis(self._handle, index):
+                raise ValueError("x must have one sample per value of this line, and at least two")
+        except Exception:
+            handle.close()
+            if started:
+                self._drop_line_x(index)
+            raise
+        self._drop_line_x(index)
+        key = ("line-x", index)
+        self._sources[key] = (handle, data)
+        token = (self, key)
+        self._tokens[key] = token
+        _lib.h5plot_set_line_axis_reader(self._handle, index, self._read_cb, c_void_p(id(token)))
+
+    def _drop_line_x(self, index: int) -> None:
+        self._line_x.pop(index, None)
+        key = ("line-x", index)
+        held = self._sources.pop(key, None)
+        self._tokens.pop(key, None)
+        if held is not None:
+            held[0].close()
 
     def _drop_x_file(self) -> None:
         held = self._sources.pop("x", None)
@@ -317,6 +400,7 @@ class Plot:
         self._names.clear()
         self._colours.clear()
         self._x = None
+        self._line_x.clear()
 
     def line_name(self, index: int):
         if index < 0 or index >= len(self._names):
