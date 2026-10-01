@@ -599,6 +599,14 @@ int h5plot_sample(const H5Plot* plot, double px, double py, H5PlotSample* out)
     }
     const double w = static_cast<double>(plot->width);
     const double h = static_cast<double>(plot->height);
+    // The curve is drawn in the pane and nowhere else. A pointer on the y
+    // axis is not over a sample: the numbers sit in the gutter, and the
+    // stroke never reaches them. Answering anyway snaps the reading to
+    // whichever sample is nearest that gutter, which is a point the reader
+    // is not looking at.
+    if (px < 0.0 || py < 0.0 || px > w || py > h) {
+        return 0;
+    }
     const gui::PlotView view =
         plot->camera.frame(w, h, plot->pixelRatio, static_cast<int>(plot->lines.size()));
     const gui::AxisMapping xMap = gui::xMappingOf(view);
@@ -643,6 +651,12 @@ int h5plot_sample(const H5Plot* plot, double px, double py, H5PlotSample* out)
             }
             const double sx = xMap.fractionOf(x) * w;
             const double sy = h - yMap.fractionOf(value) * h;
+            // A sample kept so the stroke can enter the pane is not a sample
+            // on it. Tracking one of those draws the reading in the gutter,
+            // where the curve is not.
+            if (sx < 0.0 || sy < 0.0 || sx > w || sy > h) {
+                continue;
+            }
             const double distance = (sx - px) * (sx - px) + (sy - py) * (sy - py);
             if (distance <= bestDistance) {
                 bestDistance = distance;

@@ -130,7 +130,9 @@ H5PLOT_API int h5plot_nearest(const H5Plot* plot, double px, double py);
 /* The drawn sample closest to a pane-local pixel. x and y are that sample's
  * values, through the axis the line was drawn on — a shifted line's own y,
  * not the common one. px and py are where it was drawn. Returns 0 when
- * nothing drawable is in hand. */
+ * nothing drawable is in hand, and when the pixel is outside the pane:
+ * the gutters hold the axes, not the curve. A sample that itself lands
+ * outside the pane is not a candidate. */
 typedef struct H5PlotSample
 {
     int line;

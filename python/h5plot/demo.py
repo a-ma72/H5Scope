@@ -89,7 +89,6 @@ def main() -> int:
     plot.add_line(sine, name="sine")
     plot.add_line(cosine, name="cosine")
     plot.add_line(slow, name="slow")
-    plot.add_line(np.full(sine.shape, 3.14), name="test")
     
     window.show()
     return app.exec()
