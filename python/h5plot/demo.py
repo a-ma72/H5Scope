@@ -72,8 +72,10 @@ def main() -> int:
     scales_layout.addStretch(1)
     hint = QLabel("Links verschiebt die Ansicht, rechts zieht ein Rechteck "
                   "und nennt den Bereich, den es öffnet. "
+                  "Das Rad mit Shift zoomt X, mit Strg Y. "
                   "Alt oder die mittlere Taste verschiebt die Kurve unter dem Zeiger "
                   "in Y und gibt ihr eine eigene Achse mit ihrem Namen. "
+                  "Alt+Strg und das Rad skalieren nur diese Kurve in Y. "
                   "Strg-Klick legt sie zurück. Der Zeiger liest den Wert "
                   "der nächsten Kurve.")
     hint.setWordWrap(True)
@@ -87,6 +89,8 @@ def main() -> int:
     plot.add_line(sine, name="sine")
     plot.add_line(cosine, name="cosine")
     plot.add_line(slow, name="slow")
+    plot.add_line(np.full(sine.shape, 3.14), name="test")
+    
     window.show()
     return app.exec()
 

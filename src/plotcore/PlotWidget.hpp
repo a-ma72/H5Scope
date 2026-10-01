@@ -108,6 +108,8 @@ private:
     {
         double shiftX = 0.0;
         double shiftY = 0.0;
+        /// 1 is the common axis. See PlotCamera::lineSpan.
+        double scaleY = 1.0;
         bool own = false;
         double ySpan = 1.0;
     };

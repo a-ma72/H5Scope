@@ -93,21 +93,31 @@ H5PLOT_API void h5plot_set_y_log_base(H5Plot* plot, double base);
 H5PLOT_API double h5plot_x_log_base(const H5Plot* plot);
 H5PLOT_API double h5plot_y_log_base(const H5Plot* plot);
 H5PLOT_API void h5plot_reset_view(H5Plot* plot);
+/* Pane-local pixels, y downward. factor above one zooms in.
+ * Shift alone is x, Ctrl alone is y, and either together with the other
+ * is both. Alt with Ctrl, and without Shift, zooms only the line nearest
+ * the pointer, in y, and gives it an axis of its own so the numbers beside
+ * it are the values it is drawn at. A pointer on no line zooms nothing:
+ * those keys named one curve, and a miss is not a request to move the frame. */
 H5PLOT_API void h5plot_wheel(H5Plot* plot, double px, double py, double factor, int shift,
-                             int control);
+                             int control, int alt);
 H5PLOT_API void h5plot_pan(H5Plot* plot, double dx, double dy);
 
 /* Pane-local pixels, y downward. Returns 1 when the window moved.
- * A band under 12 pixels on either side is refused and returns 0. */
+ * A band under 12 pixels on either side is refused and returns 0.
+ * A line scaled in y keeps that scale. The band is one fraction of the
+ * pane, and the line gives that fraction of the window it was drawn in,
+ * so the samples inside the band fill the pane on every scale. */
 H5PLOT_API int h5plot_zoom_rect(H5Plot* plot, double x0, double y0, double x1, double y1);
 
 /* Open the window on these data values. A bound at or below zero on a
  * logarithmic axis is clipped to the part of the axis that exists. */
 H5PLOT_API void h5plot_set_range(H5Plot* plot, double x0, double x1, double y0, double y1);
 
-/* A shifted line is drawn on its own y axis: the common window, plus that
- * line's y shift. The common extent is unchanged, so the other curves stay.
- * Turning the axis off clears the shift and the line returns to the common one. */
+/* A line on its own y axis is drawn in its own window: the common window,
+ * shifted, and possibly scaled. The common extent is unchanged, so the
+ * other curves stay. Turning the axis off clears the shift and the scale,
+ * and the line returns to the common one. */
 H5PLOT_API void h5plot_set_own_axis(H5Plot* plot, int index, int on);
 H5PLOT_API int h5plot_line_count(const H5Plot* plot);
 H5PLOT_API int h5plot_own_axis(const H5Plot* plot, int index);
@@ -136,7 +146,9 @@ typedef struct H5PlotSample
 H5PLOT_API int h5plot_sample(const H5Plot* plot, double px, double py, H5PlotSample* out);
 
 /* Move one line in y by a pane-local pixel delta, and give it its own y axis
- * so the numbers beside it are the values it is drawn at. dx is ignored. */
+ * so the numbers beside it are the values it is drawn at. The delta is a
+ * share of that line's own window, so a line that has been scaled still
+ * follows the pointer. dx is ignored. */
 H5PLOT_API void h5plot_shift_line(H5Plot* plot, int index, double dx, double dy);
 
 H5PLOT_API double h5plot_view_min_x(const H5Plot* plot);
@@ -171,8 +183,8 @@ H5PLOT_API void h5plot_copy_run_lines(const H5Plot* plot, int* lines);
 H5PLOT_API int h5plot_x_log(const H5Plot* plot);
 H5PLOT_API int h5plot_y_log(const H5Plot* plot);
 
-/* The y window that line is drawn in. The common window, or the shifted one
- * when the line has an axis of its own. */
+/* The y window that line is drawn in. The common window, or its own when
+ * the line has an axis of its own -- shifted, scaled, or both. */
 H5PLOT_API void h5plot_line_y_range(const H5Plot* plot, int index, double* low, double* high);
 
 #ifdef __cplusplus

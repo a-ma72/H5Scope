@@ -276,8 +276,9 @@ class MplView:
         key = event.key or ""
         shift = "shift" in key
         control = "control" in key or "ctrl" in key
-        self.plot.wheel(at[0], at[1], 1.25 ** float(event.step), shift and not control,
-                        control and not shift)
+        alt = "alt" in key
+        # Raw flags. h5plot_wheel decides, including Alt+Ctrl scaling one curve.
+        self.plot.wheel(at[0], at[1], 1.25 ** float(event.step), shift, control, alt)
         self.redraw()
 
     def _press(self, event) -> None:

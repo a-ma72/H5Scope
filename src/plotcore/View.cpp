@@ -407,11 +407,94 @@ PlotCamera::Span PlotCamera::ownSpan(double lineLow, double lineHigh, double shi
     return {whole.low + lowF * span + shift, whole.low + highF * span + shift};
 }
 
-PlotCamera::Span PlotCamera::shiftedSpan(double shift) const
+PlotCamera::Span PlotCamera::lineSpan(double scale, double shift) const
 {
     const double from = axisPosition(viewMinY(), yLog_, yLogBase_);
     const double to = axisPosition(viewMaxY(), yLog_, yLogBase_);
-    return {axisValue(from + shift, yLog_, yLogBase_), axisValue(to + shift, yLog_, yLogBase_)};
+    // Scale one is the shift on its own, and it is this formula rather than
+    // the general one below so that a shifted line does not move by an ulp
+    // when nothing about it changed. (from - low) / full * full is not
+    // always from - low.
+    if (!(scale > 0.0) || scale == 1.0) {
+        return {axisValue(from + shift, yLog_, yLogBase_), axisValue(to + shift, yLog_, yLogBase_)};
+    }
+    const Span axis = paddedY();
+    const double low = axisPosition(axis.low, yLog_, yLogBase_);
+    const double high = axisPosition(axis.high, yLog_, yLogBase_);
+    const double full = high - low;
+    const double view = to - from;
+    if (!(full > 0.0) || !(view > 0.0)) {
+        return {axisValue(from + shift, yLog_, yLogBase_), axisValue(to + shift, yLog_, yLogBase_)};
+    }
+    const double lowF = (from - low) / full;
+    const double highF = (to - low) / full;
+    const double home = full / scale;
+    const double homeFrom = (low + high) / 2.0 + shift - home / 2.0;
+    return {axisValue(homeFrom + lowF * home, yLog_, yLogBase_),
+            axisValue(homeFrom + highF * home, yLog_, yLogBase_)};
+}
+
+PlotCamera::Span PlotCamera::shiftedSpan(double shift) const
+{
+    return lineSpan(1.0, shift);
+}
+
+void PlotCamera::scaleLine(double& scale, double& shift, double fractionUp, double factor) const
+{
+    if (!(factor > 0.0) || !std::isfinite(factor)) {
+        return;
+    }
+    if (!(scale > 0.0) || !std::isfinite(scale)) {
+        scale = 1.0;
+    }
+    const Span axis = paddedY();
+    const double low = axisPosition(axis.low, yLog_, yLogBase_);
+    const double high = axisPosition(axis.high, yLog_, yLogBase_);
+    const double full = high - low;
+    const double from = axisPosition(viewMinY(), yLog_, yLogBase_);
+    const double to = axisPosition(viewMaxY(), yLog_, yLogBase_);
+    const double view = to - from;
+    if (!(full > 0.0) || !(view > 0.0)) {
+        return;
+    }
+    const Span window = lineSpan(scale, shift);
+    const double visFrom = axisPosition(window.low, yLog_, yLogBase_);
+    const double visTo = axisPosition(window.high, yLog_, yLogBase_);
+    const double span = visTo - visFrom;
+    if (!(span > 0.0)) {
+        return;
+    }
+    const double g = std::clamp(fractionUp, 0.0, 1.0);
+    const double held = visFrom + g * span;
+    // The same two limits as a wheel on the common axis, in the units a pan
+    // is measured in. The whole axis is as far out as zoom 1, and the
+    // ceiling is as far in as maxZoom. A line already past either one stays
+    // there: the limit is not a reason to throw the reader back.
+    const double minSpan = full / maxZoom();
+    const double maxSpan = full;
+    double next = span / factor;
+    if (factor >= 1.0) {
+        next = std::max(next, std::min(span, minSpan));
+    } else {
+        next = std::min(next, std::max(span, maxSpan));
+    }
+    if (!(next > 0.0)) {
+        return;
+    }
+    const double lowF = (from - low) / full;
+    const double highF = (to - low) / full;
+    const double viewFrac = highF - lowF;
+    if (!(viewFrac > 0.0)) {
+        return;
+    }
+    const double newFrom = held - g * next;
+    const double newHome = next / viewFrac;
+    if (!(newHome > 0.0)) {
+        return;
+    }
+    scale = full / newHome;
+    const double homeFrom = newFrom - lowF * newHome;
+    shift = homeFrom + newHome / 2.0 - (low + high) / 2.0;
 }
 
 double PlotCamera::xSpan() const

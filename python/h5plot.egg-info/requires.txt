@@ -1,2 +1,5 @@
 numpy
 PySide6
+
+[matplotlib]
+matplotlib>=3.8

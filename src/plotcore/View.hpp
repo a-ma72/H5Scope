@@ -77,8 +77,33 @@ public:
     /// A line drawn in this window sits that far off the common axis, and the
     /// numbers on the window are the values the line is drawn at. The scale
     /// stays the common axis's, logarithm included, so a shift does not change
-    /// what a reading means.
+    /// what a reading means. `lineSpan(1, shift)`.
     [[nodiscard]] Span shiftedSpan(double shift) const;
+
+    /// The y window one line is drawn in.
+    ///
+    /// A scale of one and a shift of zero is the common window. A scale above
+    /// one shows less of the axis: the line's whole window is the common
+    /// axis's whole window, shrunk by `scale` about its centre and then moved
+    /// by `shift`, and what is on screen is the same fraction of that whole
+    /// window that the common axis is showing of its own.
+    ///
+    /// The fraction is what makes the next gesture agree. A pan, a wheel and
+    /// a rectangle all change which fraction of the common axis is on screen,
+    /// and this line gives that same fraction of its own window. The band is
+    /// one region of the pane, so every line fills the pane with what was
+    /// inside the band, however far apart their scales have gone. A scale
+    /// stored against the window then on screen would be multiplied by the
+    /// common zoom, and the samples inside the band would leave the pane.
+    [[nodiscard]] Span lineSpan(double scale, double shift) const;
+
+    /// Zoom this line's y by `factor` about `fractionUp` of the pane, and
+    /// leave the common axis where it is. Zero is the bottom. The value under
+    /// the pointer stays under it, and the result is written back into
+    /// `scale` and `shift`. Zooming in stops at the same ceiling as the
+    /// common axis; zooming out stops when the line shows the whole axis.
+    /// Neither limit pulls a line back from where a previous zoom put it.
+    void scaleLine(double& scale, double& shift, double fractionUp, double factor) const;
 
     /// The current window, in the units a pan is measured in.
     [[nodiscard]] double xSpan() const;

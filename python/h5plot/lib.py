@@ -102,7 +102,7 @@ _lib.h5plot_x_log_base.restype = c_double
 _lib.h5plot_y_log_base.argtypes = [c_void_p]
 _lib.h5plot_y_log_base.restype = c_double
 _lib.h5plot_reset_view.argtypes = [c_void_p]
-_lib.h5plot_wheel.argtypes = [c_void_p, c_double, c_double, c_double, c_int, c_int]
+_lib.h5plot_wheel.argtypes = [c_void_p, c_double, c_double, c_double, c_int, c_int, c_int]
 _lib.h5plot_pan.argtypes = [c_void_p, c_double, c_double]
 _lib.h5plot_zoom_rect.argtypes = [c_void_p, c_double, c_double, c_double, c_double]
 _lib.h5plot_zoom_rect.restype = c_int
@@ -378,8 +378,16 @@ class Plot:
     def reset_view(self) -> None:
         _lib.h5plot_reset_view(self._handle)
 
-    def wheel(self, px: float, py: float, factor: float, shift: bool, control: bool) -> None:
-        _lib.h5plot_wheel(self._handle, px, py, factor, 1 if shift else 0, 1 if control else 0)
+    def wheel(self, px: float, py: float, factor: float, shift: bool, control: bool,
+              alt: bool = False) -> None:
+        """Zoom about a pane-local pixel. A factor above one zooms in.
+
+        Shift alone is x, Ctrl alone is y, and both together is both.
+        Alt with Ctrl scales only the curve nearest the pointer, in y,
+        and the value under the pointer stays where it is.
+        """
+        _lib.h5plot_wheel(self._handle, px, py, factor, 1 if shift else 0, 1 if control else 0,
+                          1 if alt else 0)
 
     def pan(self, dx: float, dy: float) -> None:
         _lib.h5plot_pan(self._handle, dx, dy)

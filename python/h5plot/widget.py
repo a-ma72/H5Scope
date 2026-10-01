@@ -722,9 +722,12 @@ class PlotWidget(QWidget):
         factor = 1.25 ** (turned / 120.0)
         mods = event.modifiers()
         left, top, _width, _height = self._pane()
+        # The flags are raw. h5plot_wheel decides: Shift is x, Ctrl is y,
+        # and Alt with Ctrl scales only the curve under the pointer in y.
         self._plot.wheel(event.position().x() - left, event.position().y() - top, factor,
                          bool(mods & Qt.KeyboardModifier.ShiftModifier),
-                         bool(mods & Qt.KeyboardModifier.ControlModifier))
+                         bool(mods & Qt.KeyboardModifier.ControlModifier),
+                         bool(mods & Qt.KeyboardModifier.AltModifier))
         self._reproject()
 
     def _pane_point(self, pos):
@@ -749,9 +752,10 @@ class PlotWidget(QWidget):
             return
         ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
         if event.button() == Qt.MouseButton.LeftButton and ctrl and not alt and self._band is None:
-            # A double-click puts the window back and leaves the shift. This is
-            # the way back for the curve: its axis goes, and so does the offset,
-            # because the common numbers would otherwise name a place it has left.
+            # A double-click puts the window back and leaves the shift and the
+            # y scale. This is the way back for the curve: its axis goes, and
+            # so do the offset and the scale, because the common numbers would
+            # otherwise name a place it has left.
             index = self._plot.nearest(*self._pane_point(event.position()))
             if index >= 0 and self._plot.own_axis(index):
                 self._reading = None

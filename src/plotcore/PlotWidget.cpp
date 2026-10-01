@@ -186,7 +186,7 @@ void PlotWidget::projectAll()
         lines_[line].yMax = view.yMax;
         PlotView drawn = view;
         if (pose.own) {
-            const PlotCamera::Span span = camera_.shiftedSpan(pose.shiftY);
+            const PlotCamera::Span span = camera_.lineSpan(pose.scaleY, pose.shiftY);
             drawn.yMin = span.low;
             drawn.yMax = span.high;
             lines_[line].yMin = span.low;
@@ -233,10 +233,28 @@ void PlotWidget::zoomAt(const QPointF& pos, double factor, Qt::KeyboardModifiers
     if (area.width() <= 0 || area.height() <= 0) {
         return;
     }
-    const double fx = (pos.x() - area.x()) / static_cast<double>(area.width());
-    const double fy = 1.0 - (pos.y() - area.y()) / static_cast<double>(area.height());
     const bool shift = modifiers.testFlag(Qt::ShiftModifier);
     const bool control = modifiers.testFlag(Qt::ControlModifier);
+    const bool alt = modifiers.testFlag(Qt::AltModifier);
+    // Alt+Ctrl scales the curve under the pointer and leaves every other
+    // axis where it is. A miss zooms nothing, for the reason h5plot_wheel
+    // gives: the keys named one curve.
+    if (alt && control && !shift) {
+        syncPoses();
+        const QPointF local = pos - QPointF(area.topLeft());
+        const int index = nearestLine(points_, runs_, lineRuns_, local.x(), local.y(), 14.0);
+        if (index < 0 || index >= static_cast<int>(poses_.size())) {
+            return;
+        }
+        LinePose& pose = poses_[static_cast<std::size_t>(index)];
+        pose.own = true;
+        const double along = 1.0 - local.y() / static_cast<double>(area.height());
+        camera_.scaleLine(pose.scaleY, pose.shiftY, along, factor);
+        applyView();
+        return;
+    }
+    const double fx = (pos.x() - area.x()) / static_cast<double>(area.width());
+    const double fy = 1.0 - (pos.y() - area.y()) / static_cast<double>(area.height());
     camera_.zoomAt(fx, fy, factor, shift && !control, control && !shift);
     applyView();
 }
@@ -389,8 +407,9 @@ void PlotWidget::shiftLine(int index, double /*dx*/, double dy)
     LinePose& pose = poses_[static_cast<std::size_t>(index)];
     const QRect area = plotArea();
     pose.own = true;
+    const double scale = pose.scaleY > 0.0 ? pose.scaleY : 1.0;
     if (area.height() > 0 && pose.ySpan != 0.0) {
-        pose.shiftY += dy / static_cast<double>(area.height()) * pose.ySpan;
+        pose.shiftY += dy / static_cast<double>(area.height()) * pose.ySpan / scale;
     }
     update();
 }

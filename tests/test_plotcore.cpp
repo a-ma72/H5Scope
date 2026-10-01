@@ -11,6 +11,7 @@
 
 #include "plotcore/LineStore.hpp"
 #include "plotcore/PlotWidget.hpp"
+#include "plotcore/View.hpp"
 
 #include <QApplication>
 
@@ -139,4 +140,128 @@ TEST_CASE("a logarithmic y axis starts at the smallest positive value", "[plotco
     REQUIRE(store.minimum() == Approx(-2.0));
     REQUIRE(store.maximum() == Approx(4.0));
     REQUIRE(store.positiveMinimum() == Approx(0.25));
+}
+
+namespace {
+
+gui::PlotCamera cameraOver(double yMin, double yMax)
+{
+    gui::PlotCamera camera;
+    camera.setDataExtent(0.0, 100.0, yMin, yMax, 0.0, yMin > 0.0 ? yMin : 0.0, 1'000);
+    camera.reset();
+    return camera;
+}
+
+double fractionOf(double value, double low, double high)
+{
+    return (value - low) / (high - low);
+}
+
+} // namespace
+
+TEST_CASE("scaling one line in y holds the value under the pointer", "[plotcore]")
+{
+    gui::PlotCamera camera = cameraOver(0.0, 10.0);
+    const double y0 = camera.viewMinY();
+    const double y1 = camera.viewMaxY();
+    double scale = 1.0;
+    double shift = 0.0;
+    constexpr double at = 0.25;
+    camera.scaleLine(scale, shift, at, 2.0);
+
+    REQUIRE(camera.viewMinY() == Approx(y0));
+    REQUIRE(camera.viewMaxY() == Approx(y1));
+    const gui::PlotCamera::Span window = camera.lineSpan(scale, shift);
+    const double held = y0 + at * (y1 - y0);
+    REQUIRE(window.low + at * (window.high - window.low) == Approx(held));
+    REQUIRE(window.high - window.low == Approx((y1 - y0) / 2.0));
+
+    // Shift zooms x. The line's y window is not part of that gesture.
+    const gui::PlotCamera::Span beforeX = window;
+    camera.zoomAt(0.4, 0.7, 3.0, true, false);
+    const gui::PlotCamera::Span afterX = camera.lineSpan(scale, shift);
+    REQUIRE(afterX.low == Approx(beforeX.low));
+    REQUIRE(afterX.high == Approx(beforeX.high));
+}
+
+TEST_CASE("a wheel on y zooms a scaled line about the same point", "[plotcore]")
+{
+    gui::PlotCamera camera = cameraOver(0.0, 10.0);
+    double scale = 1.0;
+    double shift = 0.0;
+    camera.scaleLine(scale, shift, 0.2, 2.0);
+    constexpr double at = 0.35;
+    const gui::PlotCamera::Span before = camera.lineSpan(scale, shift);
+    const double pointer = before.low + at * (before.high - before.low);
+    const double common = camera.viewMinY() + at * (camera.viewMaxY() - camera.viewMinY());
+    camera.zoomAt(0.5, at, 2.0, false, true);
+    const gui::PlotCamera::Span after = camera.lineSpan(scale, shift);
+    REQUIRE(after.low + at * (after.high - after.low) == Approx(pointer));
+    REQUIRE(camera.viewMinY() + at * (camera.viewMaxY() - camera.viewMinY()) == Approx(common));
+    REQUIRE(after.high - after.low == Approx((before.high - before.low) / 2.0));
+}
+
+TEST_CASE("a pan moves a scaled line by the same fraction of the pane", "[plotcore]")
+{
+    gui::PlotCamera camera = cameraOver(0.0, 10.0);
+    double scale = 1.0;
+    double shift = 0.0;
+    camera.scaleLine(scale, shift, 0.5, 2.0);
+    const gui::PlotCamera::Span before = camera.lineSpan(scale, shift);
+    const double common0 = camera.viewMinY();
+    const double commonSpan = camera.viewMaxY() - common0;
+    camera.panBy(0.0, 20.0, 200.0, 100.0);
+    const gui::PlotCamera::Span after = camera.lineSpan(scale, shift);
+    const double commonMoved = (camera.viewMinY() - common0) / commonSpan;
+    const double lineMoved = (after.low - before.low) / (before.high - before.low);
+    REQUIRE(commonMoved == Approx(0.2));
+    REQUIRE(lineMoved == Approx(commonMoved));
+}
+
+TEST_CASE("a rectangle zoom takes the same fraction of a scaled line", "[plotcore]")
+{
+    gui::PlotCamera camera = cameraOver(0.0, 10.0);
+    double scale = 1.0;
+    double shift = 0.0;
+    // Off centre, so the shift is not zero and a bug that only works for a
+    // centred scale still fails.
+    camera.scaleLine(scale, shift, 0.2, 2.0);
+    const gui::PlotCamera::Span before = camera.lineSpan(scale, shift);
+    const double common0 = camera.viewMinY();
+    const double common1 = camera.viewMaxY();
+    REQUIRE(camera.zoomToRegion(50.0, 25.0, 150.0, 75.0, 200.0, 100.0));
+    const gui::PlotCamera::Span after = camera.lineSpan(scale, shift);
+    REQUIRE(fractionOf(camera.viewMinY(), common0, common1) == Approx(0.25));
+    REQUIRE(fractionOf(camera.viewMaxY(), common0, common1) == Approx(0.75));
+    REQUIRE(fractionOf(after.low, before.low, before.high) == Approx(0.25));
+    REQUIRE(fractionOf(after.high, before.low, before.high) == Approx(0.75));
+}
+
+TEST_CASE("a rectangle zoom keeps a shifted line on the same fraction", "[plotcore]")
+{
+    gui::PlotCamera camera = cameraOver(0.0, 10.0);
+    constexpr double shift = 1.5;
+    const gui::PlotCamera::Span before = camera.lineSpan(1.0, shift);
+    REQUIRE(camera.zoomToRegion(50.0, 25.0, 150.0, 75.0, 200.0, 100.0));
+    const gui::PlotCamera::Span after = camera.lineSpan(1.0, shift);
+    REQUIRE(after.low == Approx(camera.viewMinY() + shift));
+    REQUIRE(after.high == Approx(camera.viewMaxY() + shift));
+    REQUIRE(fractionOf(after.low, before.low, before.high) == Approx(0.25));
+    REQUIRE(fractionOf(after.high, before.low, before.high) == Approx(0.75));
+}
+
+TEST_CASE("a rectangle on a logarithmic y takes the same fraction of a scaled line", "[plotcore]")
+{
+    gui::PlotCamera camera = cameraOver(1.0, 1'000.0);
+    camera.setYLog(true);
+    double scale = 1.0;
+    double shift = 0.0;
+    camera.scaleLine(scale, shift, 0.4, 2.0);
+    const gui::PlotCamera::Span before = camera.lineSpan(scale, shift);
+    REQUIRE(camera.zoomToRegion(50.0, 25.0, 150.0, 75.0, 200.0, 100.0));
+    const gui::PlotCamera::Span after = camera.lineSpan(scale, shift);
+    const double low = std::log(before.low);
+    const double high = std::log(before.high);
+    REQUIRE(fractionOf(std::log(after.low), low, high) == Approx(0.25));
+    REQUIRE(fractionOf(std::log(after.high), low, high) == Approx(0.75));
 }

@@ -277,6 +277,8 @@ struct Pose
 {
     double shiftX = 0.0;
     double shiftY = 0.0;
+    /// 1 is the common axis. See PlotCamera::lineSpan.
+    double scaleY = 1.0;
     bool own = false;
     double ySpan = 1.0;
 };
@@ -490,13 +492,27 @@ void h5plot_reset_view(H5Plot* plot)
     }
 }
 
-void h5plot_wheel(H5Plot* plot, double px, double py, double factor, int shift, int control)
+void h5plot_wheel(H5Plot* plot, double px, double py, double factor, int shift, int control, int alt)
 {
     if (plot == nullptr || plot->width <= 0 || plot->height <= 0) {
         return;
     }
     const double fx = px / static_cast<double>(plot->width);
     const double fy = 1.0 - py / static_cast<double>(plot->height);
+    // Alt+Ctrl names one curve. The hit is the same 14 pixels as the drag
+    // that gives a curve its own axis: a wheel in empty space is not a
+    // request to scale whichever stroke happens to be nearest on the pane,
+    // and it is not a request to zoom the frame either.
+    if (alt != 0 && control != 0 && shift == 0) {
+        const int index = gui::nearestLine(plot->points, plot->runs, plot->lineRuns, px, py, 14.0);
+        if (index < 0 || index >= static_cast<int>(plot->poses.size())) {
+            return;
+        }
+        Pose& pose = plot->poses[static_cast<std::size_t>(index)];
+        pose.own = true;
+        plot->camera.scaleLine(pose.scaleY, pose.shiftY, fy, factor);
+        return;
+    }
     plot->camera.zoomAt(fx, fy, factor, shift != 0 && control == 0, control != 0 && shift == 0);
 }
 
@@ -532,6 +548,7 @@ void h5plot_set_own_axis(H5Plot* plot, int index, int on)
     pose.own = on != 0;
     if (!pose.own) {
         pose.shiftY = 0.0;
+        pose.scaleY = 1.0;
     }
 }
 
@@ -606,7 +623,8 @@ int h5plot_sample(const H5Plot* plot, double px, double py, H5PlotSample* out)
         }
         gui::PlotView drawn = view;
         if (index < plot->poses.size() && plot->poses[index].own) {
-            const gui::PlotCamera::Span span = plot->camera.shiftedSpan(plot->poses[index].shiftY);
+            const Pose& pose = plot->poses[index];
+            const gui::PlotCamera::Span span = plot->camera.lineSpan(pose.scaleY, pose.shiftY);
             drawn.yMin = span.low;
             drawn.yMax = span.high;
         }
@@ -663,8 +681,9 @@ void h5plot_shift_line(H5Plot* plot, int index, double /*dx*/, double dy)
     // the place the curve just left.
     Pose& pose = plot->poses[static_cast<std::size_t>(index)];
     pose.own = true;
+    const double scale = pose.scaleY > 0.0 ? pose.scaleY : 1.0;
     if (plot->height > 0 && pose.ySpan != 0.0) {
-        pose.shiftY += dy / static_cast<double>(plot->height) * pose.ySpan;
+        pose.shiftY += dy / static_cast<double>(plot->height) * pose.ySpan / scale;
     }
 }
 
@@ -737,7 +756,7 @@ int h5plot_project(H5Plot* plot)
         line.ownY = false;
         gui::PlotView drawn = view;
         if (pose.own) {
-            const gui::PlotCamera::Span span = plot->camera.shiftedSpan(pose.shiftY);
+            const gui::PlotCamera::Span span = plot->camera.lineSpan(pose.scaleY, pose.shiftY);
             drawn.yMin = span.low;
             drawn.yMax = span.high;
         } else {
@@ -829,8 +848,8 @@ void h5plot_line_y_range(const H5Plot* plot, int index, double* low, double* hig
     }
     if (index >= 0 && index < static_cast<int>(plot->poses.size()) &&
         plot->poses[static_cast<std::size_t>(index)].own) {
-        const gui::PlotCamera::Span span =
-            plot->camera.shiftedSpan(plot->poses[static_cast<std::size_t>(index)].shiftY);
+        const Pose& pose = plot->poses[static_cast<std::size_t>(index)];
+        const gui::PlotCamera::Span span = plot->camera.lineSpan(pose.scaleY, pose.shiftY);
         *low = span.low;
         *high = span.high;
         return;
