@@ -72,12 +72,15 @@ def main() -> int:
         base.setText(base_names[base_i["i"]])
 
     base.clicked.connect(cycle_base)
+    stack = QPushButton("Stapeln")
+    stack.clicked.connect(plot.stack_lines)
     scales = QWidget()
     scales_layout = QHBoxLayout(scales)
     scales_layout.setContentsMargins(8, 0, 8, 0)
     scales_layout.addWidget(log_y)
     scales_layout.addWidget(log_x)
     scales_layout.addWidget(base)
+    scales_layout.addWidget(stack)
     scales_layout.addStretch(1)
     hint = QLabel("Links verschiebt die Ansicht, rechts zieht ein Rechteck "
                   "und nennt den Bereich, den es öffnet. "
@@ -87,7 +90,8 @@ def main() -> int:
                   "Alt+Strg und das Rad skalieren nur diese Kurve in Y. "
                   "Strg-Klick legt sie zurück. Der Zeiger liest den Wert "
                   "der nächsten Kurve. pulse hat eine eigene Zeit und liegt "
-                  "nur zwischen 240 s und 260 s.")
+                  "nur zwischen 240 s und 260 s. Stapeln legt jede Kurve "
+                  "in ein gleich hohes Band.")
     hint.setWordWrap(True)
     layout = QVBoxLayout(window)
     layout.setContentsMargins(0, 0, 0, 0)

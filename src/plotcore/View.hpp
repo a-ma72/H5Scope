@@ -105,12 +105,75 @@ public:
     /// Neither limit pulls a line back from where a previous zoom put it.
     void scaleLine(double& scale, double& shift, double fractionUp, double factor) const;
 
+    /// Put `low`..`high` on the fraction `fractionLow`..`fractionHigh` of the
+    /// pane, and write the scale and shift that do it. Zero is the bottom.
+    ///
+    /// The span that lands on the band is the padded one: five percent of air,
+    /// or a unit when the line is flat, the same air the common axis gets.
+    /// What is stored is still a home window, so the next pan or wheel takes
+    /// the same fraction of every band. False when the band or the span is
+    /// empty, and on a logarithmic axis when either end is not above zero —
+    /// there is no place to put a value the axis cannot draw.
+    bool placeLine(double& scale, double& shift, double low, double high, double fractionLow,
+                   double fractionHigh) const;
+
+    /// `placeLine` on `logarithmic` rather than on the common axis's scale.
+    /// When the two agree this is that call. When they do not, the stored
+    /// scale is measured against this line's own padded span, and the
+    /// fraction of the pane is still the common axis's.
+    bool placeLine(double& scale, double& shift, double low, double high, double fractionLow,
+                   double fractionHigh, bool logarithmic) const;
+
+    /// The y window one line is drawn in, on `logarithmic`.
+    ///
+    /// When that is the common axis's scale this is `lineSpan(scale, shift)`,
+    /// and a line that has not left that scale does not move by an ulp. When
+    /// it is not, scale and shift are in the units of this line's own padded
+    /// span (`lineLow`..`lineHigh`). The share of the pane is still the
+    /// common axis's, so one wheel moves every line by the same share of the
+    /// window it is drawn in.
+    [[nodiscard]] Span lineSpan(double scale, double shift, bool logarithmic, double lineLow,
+                                double lineHigh) const;
+
+    /// The scale and shift whose `lineSpan` is `windowLow`..`windowHigh`.
+    /// False when that window has no span the scale can draw.
+    bool fitLine(double& scale, double& shift, bool logarithmic, double lineLow, double lineHigh,
+                 double windowLow, double windowHigh) const;
+
+    /// Keep the padded span on the same share of the pane, and write the
+    /// scale and shift that do it on `toLog`. A line with nothing above zero
+    /// is given the empty decade, so the band stays and the stroke does not.
+    /// False when the span that is there cannot be placed.
+    bool retargetLine(double& scale, double& shift, bool fromLog, bool toLog, double low,
+                      double high, double positive, bool hasPositive) const;
+
+    /// `scaleLine` on a line whose scale is `logarithmic`. When that is the
+    /// common axis's scale the extents are not read.
+    void scaleLine(double& scale, double& shift, double fractionUp, double factor, bool logarithmic,
+                   double lineLow, double lineHigh) const;
+
+    /// What a drag stores as the line's y span, so that dividing by `scale`
+    /// afterwards is one share of the window. On the common scale it is that
+    /// axis's own span. On a line's scale it is the window's span times
+    /// `scale`, which comes back to the window once the drag divides.
+    [[nodiscard]] double shiftUnits(double scale, bool logarithmic, double windowLow,
+                                    double windowHigh) const;
+
+    /// The whole y axis, back on screen. X is left where it is.
+    void resetY();
+
     /// The current window, in the units a pan is measured in.
     [[nodiscard]] double xSpan() const;
     [[nodiscard]] double ySpan() const;
 
     [[nodiscard]] Span paddedX() const;
     [[nodiscard]] Span paddedY() const;
+
+    /// The span a stacked band is drawn from. On a logarithmic axis a low end
+    /// at or below zero is replaced by `positive` when there is one. False
+    /// when nothing on the line can be drawn — the line is left as it was.
+    [[nodiscard]] static bool bandSpan(bool logarithmic, double low, double high, double positive,
+                                       bool hasPositive, double& from, double& to);
 
     /// The data value under a pane-local pixel. zoomToRegion resolves a band
     /// through these, so a readout of that band has to ask them too.
@@ -127,6 +190,12 @@ private:
                     double factor, bool logarithmic, double base, double minimumSpan);
     [[nodiscard]] double valueAlong(double low, double high, double at, bool logarithmic,
                                     double base) const;
+    /// The common window, in the units a pan on that axis is measured in.
+    bool viewFrame(double& axisLow, double& axisHigh, double& from, double& to) const;
+    /// The span scale and shift are measured against. The common axis when
+    /// `logarithmic` is its scale, and this line's padded span otherwise.
+    bool referenceSpan(bool logarithmic, double lineLow, double lineHigh, double& full,
+                       double& center) const;
     [[nodiscard]] double maxZoom() const;
     [[nodiscard]] double minimumSpanX() const;
     [[nodiscard]] double logZoomCeiling(double full, double held, double fraction,

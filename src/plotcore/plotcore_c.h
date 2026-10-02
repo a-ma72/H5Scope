@@ -30,6 +30,11 @@ typedef struct H5PlotRun
     unsigned char blue;
     unsigned char alpha;
     float width;
+    /* 1 when the vertices are a summary. A marker belongs on a sample.
+     * A logarithmic axis drops the values it cannot draw, and the stroke
+     * then has fewer vertices; those are still the extremes of a bucket,
+     * and a dot on one marks a reading nobody took. */
+    unsigned char summarised;
 } H5PlotRun;
 
 /* A tick in the pane set by h5plot_set_pane. y grows downward, as the
@@ -201,10 +206,21 @@ H5PLOT_API void h5plot_copy_run_lines(const H5Plot* plot, int* lines);
 
 H5PLOT_API int h5plot_x_log(const H5Plot* plot);
 H5PLOT_API int h5plot_y_log(const H5Plot* plot);
+/* This line's own y scale. A line still on the common axis reports that
+ * axis, and set refuses it: the checkbox is how the common axis changes.
+ * Zero and negative samples become gaps, the same way a NaN already does. */
+H5PLOT_API void h5plot_set_line_y_log(H5Plot* plot, int index, int on);
+H5PLOT_API int h5plot_line_y_log(const H5Plot* plot, int index);
 
 /* The y window that line is drawn in. The common window, or its own when
  * the line has an axis of its own -- shifted, scaled, or both. */
 H5PLOT_API void h5plot_line_y_range(const H5Plot* plot, int index, double* low, double* high);
+
+/* Each line into an equal band, the first at the top, scaled to its own
+ * padded span. The common y returns to the whole axis; x stays. A line a
+ * logarithmic axis cannot draw is left as it was. The numbers beside a
+ * stacked line are that line's values. */
+H5PLOT_API void h5plot_stack_lines(H5Plot* plot);
 
 #ifdef __cplusplus
 }

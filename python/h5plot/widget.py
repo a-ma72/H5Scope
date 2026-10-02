@@ -23,7 +23,7 @@ from PySide6.QtGui import (
     QResizeEvent,
     QWheelEvent,
 )
-from PySide6.QtWidgets import QToolTip, QWidget
+from PySide6.QtWidgets import QMenu, QToolTip, QWidget
 
 from .lib import Plot
 
@@ -364,6 +364,10 @@ class PlotWidget(QWidget):
         self._plot.reset_view()
         self._reproject()
 
+    def stack_lines(self) -> None:
+        self._plot.stack_lines()
+        self._reproject()
+
     def set_y_log(self, on: bool):
         self._plot.set_y_log(on)
         self._reproject()
@@ -502,7 +506,8 @@ class PlotWidget(QWidget):
             parts = [
                 _reading_number(reading.x, self._plot.view_max_x() - self._plot.view_min_x(),
                                 self._plot.x_log()),
-                _reading_number(reading.y, _y_span(self._plot, reading.line), self._plot.y_log()),
+                _reading_number(reading.y, _y_span(self._plot, reading.line),
+                                self._plot.line_y_log(reading.line)),
             ]
             if name and self._plot.line_count() > 1:
                 parts.insert(0, name)
@@ -706,7 +711,9 @@ class PlotWidget(QWidget):
             stroke.drawPolyline(_polygon(self._xy, run.first, run.count, ratio))
             pts = self._xy[run.first:run.first + run.count]
             on_pane = int(np.count_nonzero((pts[:, 0] >= 0.0) & (pts[:, 0] <= width)))
-            if _mark_samples(on_pane, width):
+            # A summary stays a summary when a logarithmic axis drops the
+            # values it cannot draw. Fewer vertices is not a closer look.
+            if not run.summarised and _mark_samples(on_pane, width):
                 # The stations off the pane are how the stroke enters it.
                 # A mark belongs on a sample the pane is showing.
                 stroke.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -835,11 +842,41 @@ class PlotWidget(QWidget):
             if moved:
                 self._reproject()
             else:
+                # A drag opened a window. A click did not: under twelve pixels
+                # on either side zoom_rect refuses it. That click is the
+                # axis menu. One in the pane is kept for later and opens nothing.
+                self._axis_menu(start)
                 self.update()
             return
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag = None
             self.unsetCursor()
+
+    def _own_column_at(self, pos) -> int | None:
+        left, top, _width, height = self._pane()
+        if pos.y() < top or pos.y() > top + height or pos.x() >= left:
+            return None
+        for column in self._y_layout()[0]:
+            if column["kind"] != "own":
+                continue
+            right = column["num_x"] + _OWN_COLUMN
+            if column["name_x"] <= pos.x() < right:
+                return column["series"]
+        return None
+
+    def _axis_menu(self, pos) -> None:
+        index = self._own_column_at(pos)
+        if index is None:
+            return
+        was = self._plot.line_y_log(index)
+        menu = QMenu(self)
+        action = menu.addAction("Logarithmisch")
+        action.setCheckable(True)
+        action.setChecked(was)
+        if menu.exec(self.mapToGlobal(pos.toPoint())) is not action:
+            return
+        self._plot.set_line_y_log(index, not was)
+        self._reproject()
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton:

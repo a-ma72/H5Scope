@@ -11,8 +11,9 @@ numbers the axes itself. The toolbar stays off.
 Scroll zooms, Shift scrolls x, Ctrl scrolls y. The left button pans,
 the right button pulls a rectangle and names the window it will open.
 The pointer reads the nearest drawn sample. Log x and Log y sit under
-the axes, and the base beside them numbers the powers. The pulse is a
-different length and only exists between 240 s and 260 s.
+the axes, and the base beside them numbers the powers. Stack lays each
+curve in an equal band. The pulse is a different length and only exists
+between 240 s and 260 s.
 Alt or the middle button shifts the curve under the pointer onto an axis
 of its own. Alt+Ctrl and the wheel scale only that curve in y.
 Ctrl-click puts it back. A double-click resets the window.

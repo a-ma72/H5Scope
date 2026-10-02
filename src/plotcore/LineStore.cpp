@@ -173,6 +173,14 @@ bool LineStore::lineExtent(int index, double& low, double& high) const
     return true;
 }
 
+bool LineStore::linePositiveMinimum(int index, double& out) const
+{
+    if (index < 0 || index >= lineCount()) {
+        return false;
+    }
+    return smallestPositive(lines_[static_cast<std::size_t>(index)].pyramid, out);
+}
+
 void LineStore::dropAxis()
 {
     if (!axis_.whole.empty()) {

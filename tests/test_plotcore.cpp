@@ -15,6 +15,8 @@
 
 #include <QApplication>
 
+#include <cmath>
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -356,4 +358,96 @@ TEST_CASE("a line with its own time is drawn on the shared clock", "[plotcore]")
         REQUIRE(low < 5.2);
         REQUIRE(high > 5.8);
     }
+}
+
+TEST_CASE("stacking puts each line in an equal band", "[plotcore]")
+{
+    gui::PlotCamera camera;
+    camera.setDataExtent(0.0, 10.0, -8.0, 40.0, 0.0, 1.0, 100);
+    camera.reset();
+    camera.zoomAt(0.4, 0.5, 3.0, true, false);
+    const double x0 = camera.viewMinX();
+    const double x1 = camera.viewMaxX();
+    camera.zoomAt(0.5, 0.4, 4.0, false, true);
+    camera.resetY();
+    const gui::PlotCamera::Span full = camera.paddedY();
+    REQUIRE(camera.viewMinY() == Approx(full.low));
+    REQUIRE(camera.viewMaxY() == Approx(full.high));
+    REQUIRE(camera.viewMinX() == Approx(x0));
+    REQUIRE(camera.viewMaxX() == Approx(x1));
+
+    // Three spans, none of them the common axis. The first band is the top
+    // third. The edges are the padded span, the same air the common axis uses.
+    const double lows[] = {0.0, 10.0, -4.0};
+    const double highs[] = {1.0, 30.0, -1.0};
+    for (int i = 0; i < 3; ++i) {
+        double scale = 1.0;
+        double shift = 0.0;
+        const double f0 = (3.0 - 1.0 - i) / 3.0;
+        const double f1 = (3.0 - i) / 3.0;
+        REQUIRE(camera.placeLine(scale, shift, lows[i], highs[i], f0, f1));
+        const gui::PlotCamera::Span window = camera.lineSpan(scale, shift);
+        const double air = (highs[i] - lows[i]) * 0.05;
+        REQUIRE(fractionOf(lows[i] - air, window.low, window.high) == Approx(f0));
+        REQUIRE(fractionOf(highs[i] + air, window.low, window.high) == Approx(f1));
+    }
+}
+
+TEST_CASE("a line keeps its band when its own scale becomes logarithmic", "[plotcore]")
+{
+    gui::PlotCamera camera;
+    camera.setDataExtent(0.0, 10.0, -8.0, 40.0, 0.0, 1.0, 100);
+    camera.reset();
+
+    double keptScale = 1.0;
+    double keptShift = 0.0;
+    REQUIRE(camera.placeLine(keptScale, keptShift, -4.0, -1.0, 0.0, 0.5));
+    const gui::PlotCamera::Span kept = camera.lineSpan(keptScale, keptShift);
+
+    double scale = 1.0;
+    double shift = 0.0;
+    REQUIRE(camera.placeLine(scale, shift, 1.0, 100.0, 0.5, 1.0));
+    REQUIRE(camera.retargetLine(scale, shift, false, true, 1.0, 100.0, 1.0, true));
+    const gui::PlotCamera::Span logged = camera.lineSpan(scale, shift, true, 1.0, 100.0);
+    REQUIRE(logged.low > 0.0);
+    REQUIRE(logged.high > logged.low);
+
+    // Five percent of the decades, the air padded() gives a logarithmic axis.
+    // The padded edges still sit on the top half of the pane.
+    const double from = std::log(1.0) / std::log(10.0);
+    const double to = std::log(100.0) / std::log(10.0);
+    const double air = (to - from) * 0.05;
+    const double padLow = std::pow(10.0, from - air);
+    const double padHigh = std::pow(10.0, to + air);
+    const auto logFrac = [](double value, double low, double high) {
+        return (std::log(value) - std::log(low)) / (std::log(high) - std::log(low));
+    };
+    REQUIRE(logFrac(padLow, logged.low, logged.high) == Approx(0.5));
+    REQUIRE(logFrac(padHigh, logged.low, logged.high) == Approx(1.0));
+
+    // The other line was not the one that changed scale.
+    const gui::PlotCamera::Span still = camera.lineSpan(keptScale, keptShift);
+    REQUIRE(still.low == Approx(kept.low));
+    REQUIRE(still.high == Approx(kept.high));
+
+    // A value at or below zero has no place. The positive part of the span
+    // is what the band is drawn from.
+    double crossedScale = 1.0;
+    double crossedShift = 0.0;
+    REQUIRE(camera.placeLine(crossedScale, crossedShift, -2.0, 8.0, 0.0, 0.5));
+    REQUIRE(camera.retargetLine(crossedScale, crossedShift, false, true, -2.0, 8.0, 0.25, true));
+    const gui::PlotCamera::Span crossed =
+        camera.lineSpan(crossedScale, crossedShift, true, 0.25, 8.0);
+    REQUIRE(crossed.low > 0.0);
+    REQUIRE(crossed.high > crossed.low);
+
+    // The common checkbox resets the camera. This line's window is put back
+    // in the data's own units, so the band does not jump with it.
+    const double keptLow = logged.low;
+    const double keptHigh = logged.high;
+    camera.setYLog(true);
+    REQUIRE(camera.fitLine(scale, shift, true, 1.0, 100.0, keptLow, keptHigh));
+    const gui::PlotCamera::Span after = camera.lineSpan(scale, shift, true, 1.0, 100.0);
+    REQUIRE(after.low == Approx(keptLow));
+    REQUIRE(after.high == Approx(keptHigh));
 }

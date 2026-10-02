@@ -19,6 +19,7 @@ class H5PlotRun(ctypes.Structure):
         ("blue", ctypes.c_ubyte),
         ("alpha", ctypes.c_ubyte),
         ("width", ctypes.c_float),
+        ("summarised", ctypes.c_ubyte),
     ]
 
 
@@ -115,6 +116,7 @@ _lib.h5plot_pan.argtypes = [c_void_p, c_double, c_double]
 _lib.h5plot_zoom_rect.argtypes = [c_void_p, c_double, c_double, c_double, c_double]
 _lib.h5plot_zoom_rect.restype = c_int
 _lib.h5plot_set_range.argtypes = [c_void_p, c_double, c_double, c_double, c_double]
+_lib.h5plot_stack_lines.argtypes = [c_void_p]
 _lib.h5plot_set_own_axis.argtypes = [c_void_p, c_int, c_int]
 _lib.h5plot_line_count.argtypes = [c_void_p]
 _lib.h5plot_line_count.restype = c_int
@@ -158,6 +160,9 @@ _lib.h5plot_x_log.argtypes = [c_void_p]
 _lib.h5plot_x_log.restype = c_int
 _lib.h5plot_y_log.argtypes = [c_void_p]
 _lib.h5plot_y_log.restype = c_int
+_lib.h5plot_set_line_y_log.argtypes = [c_void_p, c_int, c_int]
+_lib.h5plot_line_y_log.argtypes = [c_void_p, c_int]
+_lib.h5plot_line_y_log.restype = c_int
 _lib.h5plot_line_y_range.argtypes = [c_void_p, c_int, POINTER(c_double), POINTER(c_double)]
 
 
@@ -498,6 +503,15 @@ class Plot:
     def line_count(self) -> int:
         return int(_lib.h5plot_line_count(self._handle))
 
+    def stack_lines(self) -> None:
+        """Lay every line in an equal band, the first at the top.
+
+        Each band is that line's own padded span. Y returns to the whole
+        axis; x stays. A line a logarithmic axis cannot draw is left as it
+        was. The numbers beside a stacked line are that line's values.
+        """
+        _lib.h5plot_stack_lines(self._handle)
+
     def set_own_axis(self, index: int, on: bool) -> None:
         _lib.h5plot_set_own_axis(self._handle, int(index), 1 if on else 0)
 
@@ -592,6 +606,18 @@ class Plot:
 
     def y_log(self) -> bool:
         return bool(_lib.h5plot_y_log(self._handle))
+
+    def set_line_y_log(self, index: int, on: bool) -> None:
+        """Logarithmic y for one line that already has its own axis.
+
+        A line still on the common axis is left alone: that scale is the
+        checkbox. Zero and negative samples become gaps, as a NaN does.
+        """
+        _lib.h5plot_set_line_y_log(self._handle, int(index), 1 if on else 0)
+
+    def line_y_log(self, index: int) -> bool:
+        """The scale this line is drawn on. The common axis, when it has none of its own."""
+        return bool(_lib.h5plot_line_y_log(self._handle, int(index)))
 
     def line_y_range(self, index: int) -> tuple[float, float]:
         low = c_double()

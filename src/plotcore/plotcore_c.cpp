@@ -280,6 +280,10 @@ struct Pose
     /// 1 is the common axis. See PlotCamera::lineSpan.
     double scaleY = 1.0;
     bool own = false;
+    /// The scale this line's own axis is drawn on. Copied from the camera
+    /// when the line leaves the common axis, and left alone when the camera
+    /// changes afterwards: the checkbox is that axis, not this one.
+    bool yLog = false;
     double ySpan = 1.0;
 };
 
@@ -495,11 +499,99 @@ void h5plot_set_pane(H5Plot* plot, int width, int height, double pixel_ratio)
     plot->pixelRatio = pixel_ratio > 0.0 ? pixel_ratio : 1.0;
 }
 
+namespace {
+
+bool lineBand(const H5Plot* plot, int index, bool logarithmic, double& low, double& high)
+{
+    double rawLow = 0.0;
+    double rawHigh = 0.0;
+    if (plot == nullptr || !plot->store.lineExtent(index, rawLow, rawHigh)) {
+        return false;
+    }
+    double positive = 0.0;
+    const bool hasPositive = plot->store.linePositiveMinimum(index, positive);
+    if (gui::PlotCamera::bandSpan(logarithmic, rawLow, rawHigh, positive, hasPositive, low, high)) {
+        return true;
+    }
+    // A logarithmic axis with nothing above zero still has a column. The
+    // empty decade is what the common axis falls back to, and every sample
+    // is a gap, so the stroke is absent rather than the column disappearing.
+    if (!logarithmic) {
+        return false;
+    }
+    low = 1.0;
+    high = plot->camera.yLogBase() > 1.0 ? plot->camera.yLogBase() : 10.0;
+    return high > low;
+}
+
+struct HeldWindow
+{
+    std::size_t index = 0;
+    double low = 0.0;
+    double high = 0.0;
+    bool yLog = false;
+    double lineLow = 0.0;
+    double lineHigh = 0.0;
+};
+
+std::vector<HeldWindow> holdOwn(const H5Plot* plot)
+{
+    std::vector<HeldWindow> held;
+    for (std::size_t i = 0; i < plot->poses.size(); ++i) {
+        const Pose& pose = plot->poses[i];
+        if (!pose.own) {
+            continue;
+        }
+        double lineLow = 0.0;
+        double lineHigh = 0.0;
+        if (!lineBand(plot, static_cast<int>(i), pose.yLog, lineLow, lineHigh)) {
+            continue;
+        }
+        const gui::PlotCamera::Span window =
+            plot->camera.lineSpan(pose.scaleY, pose.shiftY, pose.yLog, lineLow, lineHigh);
+        if (!(window.high > window.low) || !std::isfinite(window.low) || !std::isfinite(window.high)) {
+            continue;
+        }
+        held.push_back(HeldWindow{i, window.low, window.high, pose.yLog, lineLow, lineHigh});
+    }
+    return held;
+}
+
+void restoreOwn(H5Plot* plot, const std::vector<HeldWindow>& held)
+{
+    for (const HeldWindow& item : held) {
+        Pose& pose = plot->poses[item.index];
+        double scale = pose.scaleY;
+        double shift = pose.shiftY;
+        if (plot->camera.fitLine(scale, shift, item.yLog, item.lineLow, item.lineHigh, item.low,
+                                 item.high)) {
+            pose.scaleY = scale;
+            pose.shiftY = shift;
+        }
+    }
+}
+
+void claimOwn(Pose& pose, const gui::PlotCamera& camera)
+{
+    if (!pose.own) {
+        pose.yLog = camera.yLog();
+    }
+    pose.own = true;
+}
+
+} // namespace
+
 void h5plot_set_ylog(H5Plot* plot, int on)
 {
-    if (plot != nullptr) {
-        plot->camera.setYLog(on != 0);
+    if (plot == nullptr || plot->camera.yLog() == (on != 0)) {
+        return;
     }
+    // The shift is stored in the common axis's units. Changing that scale
+    // would read it back in the new ones and the bands would jump. The
+    // window is taken first, in the data's own units, and put back after.
+    const std::vector<HeldWindow> held = holdOwn(plot);
+    plot->camera.setYLog(on != 0);
+    restoreOwn(plot, held);
 }
 
 void h5plot_set_xlog(H5Plot* plot, int on)
@@ -520,8 +612,14 @@ void h5plot_set_x_log_base(H5Plot* plot, double base)
 
 void h5plot_set_y_log_base(H5Plot* plot, double base)
 {
-    if (plot != nullptr) {
-        plot->camera.setYLogBase(base);
+    if (plot == nullptr) {
+        return;
+    }
+    const double before = plot->camera.yLogBase();
+    const std::vector<HeldWindow> held = holdOwn(plot);
+    plot->camera.setYLogBase(base);
+    if (plot->camera.yLogBase() != before) {
+        restoreOwn(plot, held);
     }
 }
 
@@ -559,8 +657,15 @@ void h5plot_wheel(H5Plot* plot, double px, double py, double factor, int shift, 
             return;
         }
         Pose& pose = plot->poses[static_cast<std::size_t>(index)];
-        pose.own = true;
-        plot->camera.scaleLine(pose.scaleY, pose.shiftY, fy, factor);
+        claimOwn(pose, plot->camera);
+        double lineLow = 0.0;
+        double lineHigh = 0.0;
+        if (lineBand(plot, index, pose.yLog, lineLow, lineHigh)) {
+            plot->camera.scaleLine(pose.scaleY, pose.shiftY, fy, factor, pose.yLog, lineLow,
+                                   lineHigh);
+        } else {
+            plot->camera.scaleLine(pose.scaleY, pose.shiftY, fy, factor);
+        }
         return;
     }
     plot->camera.zoomAt(fx, fy, factor, shift != 0 && control == 0, control != 0 && shift == 0);
@@ -581,6 +686,64 @@ int h5plot_zoom_rect(H5Plot* plot, double x0, double y0, double x1, double y1)
     return plot->camera.zoomToRegion(x0, y0, x1, y1, plot->width, plot->height) ? 1 : 0;
 }
 
+void h5plot_stack_lines(H5Plot* plot)
+{
+    if (plot == nullptr) {
+        return;
+    }
+    plot->syncExtent();
+    const int count = plot->store.lineCount();
+    if (plot->poses.size() != static_cast<std::size_t>(count)) {
+        plot->poses.resize(static_cast<std::size_t>(count));
+    }
+    struct Item
+    {
+        int index;
+        double low;
+        double high;
+    };
+    std::vector<Item> items;
+    items.reserve(static_cast<std::size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        double low = 0.0;
+        double high = 0.0;
+        if (!plot->store.lineExtent(i, low, high)) {
+            continue;
+        }
+        double positive = 0.0;
+        const bool hasPositive = plot->store.linePositiveMinimum(i, positive);
+        double from = 0.0;
+        double to = 0.0;
+        if (!gui::PlotCamera::bandSpan(plot->camera.yLog(), low, high, positive, hasPositive, from,
+                                       to)) {
+            continue;
+        }
+        items.push_back(Item{i, from, to});
+    }
+    if (items.empty()) {
+        return;
+    }
+    plot->camera.resetY();
+    const double bands = static_cast<double>(items.size());
+    for (std::size_t band = 0; band < items.size(); ++band) {
+        const Item& item = items[band];
+        const double at = static_cast<double>(band);
+        double scale = 1.0;
+        double shift = 0.0;
+        if (!plot->camera.placeLine(scale, shift, item.low, item.high, (bands - 1.0 - at) / bands,
+                                    (bands - at) / bands)) {
+            continue;
+        }
+        Pose& pose = plot->poses[static_cast<std::size_t>(item.index)];
+        pose.scaleY = scale;
+        pose.shiftY = shift;
+        // placeLine used the camera's scale, so the pose has to name that
+        // one. A scale the line had before the stack was in other units.
+        pose.yLog = plot->camera.yLog();
+        pose.own = true;
+    }
+}
+
 void h5plot_set_range(H5Plot* plot, double x0, double x1, double y0, double y1)
 {
     if (plot == nullptr) {
@@ -595,11 +758,14 @@ void h5plot_set_own_axis(H5Plot* plot, int index, int on)
         return;
     }
     Pose& pose = plot->poses[static_cast<std::size_t>(index)];
-    pose.own = on != 0;
-    if (!pose.own) {
-        pose.shiftY = 0.0;
-        pose.scaleY = 1.0;
+    if (on != 0) {
+        claimOwn(pose, plot->camera);
+        return;
     }
+    pose.own = false;
+    pose.shiftY = 0.0;
+    pose.scaleY = 1.0;
+    pose.yLog = false;
 }
 
 int h5plot_line_count(const H5Plot* plot)
@@ -682,9 +848,16 @@ int h5plot_sample(const H5Plot* plot, double px, double py, H5PlotSample* out)
         gui::PlotView drawn = view;
         if (index < plot->poses.size() && plot->poses[index].own) {
             const Pose& pose = plot->poses[index];
-            const gui::PlotCamera::Span span = plot->camera.lineSpan(pose.scaleY, pose.shiftY);
+            double lineLow = 0.0;
+            double lineHigh = 0.0;
+            const gui::PlotCamera::Span span =
+                lineBand(plot, static_cast<int>(index), pose.yLog, lineLow, lineHigh)
+                    ? plot->camera.lineSpan(pose.scaleY, pose.shiftY, pose.yLog, lineLow, lineHigh)
+                    : plot->camera.lineSpan(pose.scaleY, pose.shiftY);
             drawn.yMin = span.low;
             drawn.yMax = span.high;
+            drawn.yLog = pose.yLog;
+            drawn.yLogBase = plot->camera.yLogBase();
         }
         const gui::AxisMapping yMap = gui::yMappingOf(drawn);
         if (!yMap.usable) {
@@ -744,7 +917,7 @@ void h5plot_shift_line(H5Plot* plot, int index, double /*dx*/, double dy)
     // it move with it; without that, the common ticks would keep describing
     // the place the curve just left.
     Pose& pose = plot->poses[static_cast<std::size_t>(index)];
-    pose.own = true;
+    claimOwn(pose, plot->camera);
     const double scale = pose.scaleY > 0.0 ? pose.scaleY : 1.0;
     if (plot->height > 0 && pose.ySpan != 0.0) {
         pose.shiftY += dy / static_cast<double>(plot->height) * pose.ySpan / scale;
@@ -820,27 +993,40 @@ int h5plot_project(H5Plot* plot)
         line.ownY = false;
         gui::PlotView drawn = view;
         if (pose.own) {
-            const gui::PlotCamera::Span span = plot->camera.lineSpan(pose.scaleY, pose.shiftY);
+            // The camera's scale is the common axis. This line's bit is its
+            // own, and the stroke breaks where that scale has no place — a
+            // value at or below zero — the same way a NaN already does.
+            double lineLow = 0.0;
+            double lineHigh = 0.0;
+            const gui::PlotCamera::Span span =
+                lineBand(plot, static_cast<int>(i), pose.yLog, lineLow, lineHigh)
+                    ? plot->camera.lineSpan(pose.scaleY, pose.shiftY, pose.yLog, lineLow, lineHigh)
+                    : plot->camera.lineSpan(pose.scaleY, pose.shiftY);
             drawn.yMin = span.low;
             drawn.yMax = span.high;
+            drawn.yLog = pose.yLog;
+            drawn.yLogBase = plot->camera.yLogBase();
+            pose.ySpan = plot->camera.shiftUnits(pose.scaleY, pose.yLog, span.low, span.high);
         } else {
             anyShared = true;
         }
         plot->lineRuns[i] = static_cast<int>(plot->runs.size());
         const int runsBefore = static_cast<int>(plot->runs.size());
-        gui::projectLine(line, plot->axis, drawn, plot->points, plot->runs, &plot->dataPoints);
+        const gui::PlotProjected projected =
+            gui::projectLine(line, plot->axis, drawn, plot->points, plot->runs, &plot->dataPoints);
         for (int r = runsBefore; r < static_cast<int>(plot->runs.size()); ++r) {
             plot->runLines.push_back(static_cast<int>(i));
         }
         const QColor colour = line.colour;
         const auto alpha = static_cast<unsigned char>(
             std::lround(std::clamp(colour.alphaF() * line.opacity, 0.0, 1.0) * 255.0));
+        const auto summarised = static_cast<unsigned char>(projected.decimated ? 1 : 0);
         for (int r = plot->lineRuns[i]; r < static_cast<int>(plot->runs.size()); ++r) {
             const gui::PlotRun& run = plot->runs[static_cast<std::size_t>(r)];
             plot->painted.push_back(H5PlotRun{run.first, run.count, static_cast<unsigned char>(colour.red()),
                                               static_cast<unsigned char>(colour.green()),
                                               static_cast<unsigned char>(colour.blue()), alpha,
-                                              static_cast<float>(line.width)});
+                                              static_cast<float>(line.width), summarised});
         }
         if (pose.own) {
             appendTicks(plot->ticks, drawn, 2, static_cast<int>(i),
@@ -905,6 +1091,51 @@ int h5plot_y_log(const H5Plot* plot)
     return plot != nullptr && plot->camera.yLog() ? 1 : 0;
 }
 
+void h5plot_set_line_y_log(H5Plot* plot, int index, int on)
+{
+    if (plot == nullptr || index < 0 || index >= static_cast<int>(plot->poses.size())) {
+        return;
+    }
+    Pose& pose = plot->poses[static_cast<std::size_t>(index)];
+    // A line still on the common axis is that axis. The checkbox is the
+    // way to change it; this call is the line's own column.
+    if (!pose.own) {
+        return;
+    }
+    const bool next = on != 0;
+    if (pose.yLog == next) {
+        return;
+    }
+    double rawLow = 0.0;
+    double rawHigh = 0.0;
+    if (!plot->store.lineExtent(index, rawLow, rawHigh)) {
+        return;
+    }
+    double positive = 0.0;
+    const bool hasPositive = plot->store.linePositiveMinimum(index, positive);
+    double scale = pose.scaleY;
+    double shift = pose.shiftY;
+    if (!plot->camera.retargetLine(scale, shift, pose.yLog, next, rawLow, rawHigh, positive,
+                                   hasPositive)) {
+        return;
+    }
+    pose.scaleY = scale;
+    pose.shiftY = shift;
+    pose.yLog = next;
+}
+
+int h5plot_line_y_log(const H5Plot* plot, int index)
+{
+    if (plot == nullptr || index < 0 || index >= static_cast<int>(plot->poses.size())) {
+        return 0;
+    }
+    const Pose& pose = plot->poses[static_cast<std::size_t>(index)];
+    if (!pose.own) {
+        return plot->camera.yLog() ? 1 : 0;
+    }
+    return pose.yLog ? 1 : 0;
+}
+
 void h5plot_line_y_range(const H5Plot* plot, int index, double* low, double* high)
 {
     if (plot == nullptr || low == nullptr || high == nullptr) {
@@ -913,7 +1144,12 @@ void h5plot_line_y_range(const H5Plot* plot, int index, double* low, double* hig
     if (index >= 0 && index < static_cast<int>(plot->poses.size()) &&
         plot->poses[static_cast<std::size_t>(index)].own) {
         const Pose& pose = plot->poses[static_cast<std::size_t>(index)];
-        const gui::PlotCamera::Span span = plot->camera.lineSpan(pose.scaleY, pose.shiftY);
+        double lineLow = 0.0;
+        double lineHigh = 0.0;
+        const gui::PlotCamera::Span span =
+            lineBand(plot, index, pose.yLog, lineLow, lineHigh)
+                ? plot->camera.lineSpan(pose.scaleY, pose.shiftY, pose.yLog, lineLow, lineHigh)
+                : plot->camera.lineSpan(pose.scaleY, pose.shiftY);
         *low = span.low;
         *high = span.high;
         return;

@@ -55,6 +55,11 @@ public:
                        double yPositiveMin, long long samples);
     void resetView();
 
+    /// Each line into an equal band, the first at the top, scaled to its own
+    /// padded span. Y returns to the whole axis. X stays. A line a logarithmic
+    /// axis cannot draw is left as it was.
+    void stackLines();
+
     [[nodiscard]] double viewMinX() const { return camera_.viewMinX(); }
     [[nodiscard]] double viewMaxX() const { return camera_.viewMaxX(); }
     [[nodiscard]] double viewMinY() const { return camera_.viewMinY(); }
@@ -111,6 +116,9 @@ private:
         /// 1 is the common axis. See PlotCamera::lineSpan.
         double scaleY = 1.0;
         bool own = false;
+        /// Copied from the camera when the line leaves it. The checkbox does
+        /// not change it afterwards.
+        bool yLog = false;
         double ySpan = 1.0;
     };
     std::vector<LinePose> poses_;

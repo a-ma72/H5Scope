@@ -78,6 +78,12 @@ void PlotCamera::reset()
     panY_ = 0.0;
 }
 
+void PlotCamera::resetY()
+{
+    zoomY_ = 1.0;
+    panY_ = 0.0;
+}
+
 PlotCamera::Span PlotCamera::padded(double low, double high, bool logarithmic, double base)
 {
     if (logarithmic) {
@@ -495,6 +501,325 @@ void PlotCamera::scaleLine(double& scale, double& shift, double fractionUp, doub
     scale = full / newHome;
     const double homeFrom = newFrom - lowF * newHome;
     shift = homeFrom + newHome / 2.0 - (low + high) / 2.0;
+}
+
+bool PlotCamera::bandSpan(bool logarithmic, double low, double high, double positive,
+                          bool hasPositive, double& from, double& to)
+{
+    if (!std::isfinite(low) || !std::isfinite(high) || !(high >= low)) {
+        return false;
+    }
+    if (logarithmic) {
+        if (!(high > 0.0)) {
+            return false;
+        }
+        if (!(low > 0.0)) {
+            if (!hasPositive || !(positive > 0.0) || !(high > positive)) {
+                return false;
+            }
+            low = positive;
+        }
+    }
+    from = low;
+    to = high;
+    return true;
+}
+
+bool PlotCamera::placeLine(double& scale, double& shift, double low, double high,
+                           double fractionLow, double fractionHigh) const
+{
+    if (!(fractionHigh > fractionLow) || !std::isfinite(low) || !std::isfinite(high) ||
+        !(high >= low)) {
+        return false;
+    }
+    if (yLog_ && (!(low > 0.0) || !(high > 0.0))) {
+        return false;
+    }
+    const Span band = padded(low, high, yLog_, yLogBase_);
+    const double p0 = axisPosition(band.low, yLog_, yLogBase_);
+    const double p1 = axisPosition(band.high, yLog_, yLogBase_);
+    const double dataSpan = p1 - p0;
+    const Span axis = paddedY();
+    const double axisLow = axisPosition(axis.low, yLog_, yLogBase_);
+    const double axisHigh = axisPosition(axis.high, yLog_, yLogBase_);
+    const double full = axisHigh - axisLow;
+    const double from = axisPosition(viewMinY(), yLog_, yLogBase_);
+    const double to = axisPosition(viewMaxY(), yLog_, yLogBase_);
+    const double viewFrac = (to - from) / full;
+    if (!(dataSpan > 0.0) || !(full > 0.0) || !(viewFrac > 0.0)) {
+        return false;
+    }
+    // The visible window, in the axis's own positions. The data occupies
+    // fractionLow..fractionHigh of it, so the rest of the window is the
+    // other bands.
+    const double visSpan = dataSpan / (fractionHigh - fractionLow);
+    const double visFrom = p0 - fractionLow * visSpan;
+    const double lowF = (from - axisLow) / full;
+    const double home = visSpan / viewFrac;
+    if (!(home > 0.0)) {
+        return false;
+    }
+    scale = full / home;
+    const double homeFrom = visFrom - lowF * home;
+    shift = homeFrom + home / 2.0 - (axisLow + axisHigh) / 2.0;
+    return std::isfinite(scale) && std::isfinite(shift) && scale > 0.0;
+}
+
+bool PlotCamera::viewFrame(double& axisLow, double& axisHigh, double& from, double& to) const
+{
+    const Span axis = paddedY();
+    axisLow = axisPosition(axis.low, yLog_, yLogBase_);
+    axisHigh = axisPosition(axis.high, yLog_, yLogBase_);
+    from = axisPosition(viewMinY(), yLog_, yLogBase_);
+    to = axisPosition(viewMaxY(), yLog_, yLogBase_);
+    return (axisHigh > axisLow) && (to > from) && std::isfinite(axisLow) && std::isfinite(axisHigh) &&
+           std::isfinite(from) && std::isfinite(to);
+}
+
+bool PlotCamera::referenceSpan(bool logarithmic, double lineLow, double lineHigh, double& full,
+                               double& center) const
+{
+    // The same units lineSpan will read the shift back in. Mixing the common
+    // axis's units into a line on another scale is how a stored shift jumps
+    // when the checkbox changes and the line does not.
+    double low = 0.0;
+    double high = 0.0;
+    if (logarithmic == yLog_) {
+        const Span axis = paddedY();
+        low = axisPosition(axis.low, yLog_, yLogBase_);
+        high = axisPosition(axis.high, yLog_, yLogBase_);
+    } else {
+        const Span band = padded(lineLow, lineHigh, logarithmic, yLogBase_);
+        low = axisPosition(band.low, logarithmic, yLogBase_);
+        high = axisPosition(band.high, logarithmic, yLogBase_);
+    }
+    full = high - low;
+    center = (low + high) / 2.0;
+    return full > 0.0 && std::isfinite(full) && std::isfinite(center);
+}
+
+PlotCamera::Span PlotCamera::lineSpan(double scale, double shift, bool logarithmic, double lineLow,
+                                      double lineHigh) const
+{
+    if (logarithmic == yLog_) {
+        return lineSpan(scale, shift);
+    }
+    double axisLow = 0.0;
+    double axisHigh = 0.0;
+    double from = 0.0;
+    double to = 0.0;
+    double full = 0.0;
+    double center = 0.0;
+    if (!viewFrame(axisLow, axisHigh, from, to) ||
+        !referenceSpan(logarithmic, lineLow, lineHigh, full, center)) {
+        return {lineLow, lineHigh};
+    }
+    if (!(scale > 0.0) || !std::isfinite(scale)) {
+        scale = 1.0;
+    }
+    const double common = axisHigh - axisLow;
+    const double lowF = (from - axisLow) / common;
+    const double highF = (to - axisLow) / common;
+    const double home = full / scale;
+    const double homeFrom = center + shift - home / 2.0;
+    return {axisValue(homeFrom + lowF * home, logarithmic, yLogBase_),
+            axisValue(homeFrom + highF * home, logarithmic, yLogBase_)};
+}
+
+bool PlotCamera::placeLine(double& scale, double& shift, double low, double high, double fractionLow,
+                           double fractionHigh, bool logarithmic) const
+{
+    if (logarithmic == yLog_) {
+        return placeLine(scale, shift, low, high, fractionLow, fractionHigh);
+    }
+    if (!(fractionHigh > fractionLow) || !std::isfinite(low) || !std::isfinite(high) ||
+        !(high >= low)) {
+        return false;
+    }
+    if (logarithmic && (!(low > 0.0) || !(high > 0.0))) {
+        return false;
+    }
+    const Span band = padded(low, high, logarithmic, yLogBase_);
+    const double p0 = axisPosition(band.low, logarithmic, yLogBase_);
+    const double p1 = axisPosition(band.high, logarithmic, yLogBase_);
+    const double dataSpan = p1 - p0;
+    double axisLow = 0.0;
+    double axisHigh = 0.0;
+    double from = 0.0;
+    double to = 0.0;
+    double full = 0.0;
+    double center = 0.0;
+    if (!viewFrame(axisLow, axisHigh, from, to) ||
+        !referenceSpan(logarithmic, low, high, full, center)) {
+        return false;
+    }
+    const double common = axisHigh - axisLow;
+    const double viewFrac = (to - from) / common;
+    if (!(dataSpan > 0.0) || !(viewFrac > 0.0)) {
+        return false;
+    }
+    const double visSpan = dataSpan / (fractionHigh - fractionLow);
+    const double visFrom = p0 - fractionLow * visSpan;
+    const double lowF = (from - axisLow) / common;
+    const double home = visSpan / viewFrac;
+    if (!(home > 0.0)) {
+        return false;
+    }
+    scale = full / home;
+    const double homeFrom = visFrom - lowF * home;
+    shift = homeFrom + home / 2.0 - center;
+    return std::isfinite(scale) && std::isfinite(shift) && scale > 0.0;
+}
+
+bool PlotCamera::fitLine(double& scale, double& shift, bool logarithmic, double lineLow,
+                         double lineHigh, double windowLow, double windowHigh) const
+{
+    if (!std::isfinite(windowLow) || !std::isfinite(windowHigh) || !(windowHigh > windowLow)) {
+        return false;
+    }
+    if (logarithmic && (!(windowLow > 0.0) || !(windowHigh > 0.0))) {
+        return false;
+    }
+    double axisLow = 0.0;
+    double axisHigh = 0.0;
+    double from = 0.0;
+    double to = 0.0;
+    double full = 0.0;
+    double center = 0.0;
+    if (!viewFrame(axisLow, axisHigh, from, to) ||
+        !referenceSpan(logarithmic, lineLow, lineHigh, full, center)) {
+        return false;
+    }
+    const double common = axisHigh - axisLow;
+    const double lowF = (from - axisLow) / common;
+    const double highF = (to - axisLow) / common;
+    const double viewFrac = highF - lowF;
+    const double visFrom = axisPosition(windowLow, logarithmic, yLogBase_);
+    const double visTo = axisPosition(windowHigh, logarithmic, yLogBase_);
+    const double visSpan = visTo - visFrom;
+    if (!(viewFrac > 0.0) || !(visSpan > 0.0)) {
+        return false;
+    }
+    const double home = visSpan / viewFrac;
+    if (!(home > 0.0)) {
+        return false;
+    }
+    scale = full / home;
+    const double homeFrom = visFrom - lowF * home;
+    shift = homeFrom + home / 2.0 - center;
+    return std::isfinite(scale) && std::isfinite(shift) && scale > 0.0;
+}
+
+bool PlotCamera::retargetLine(double& scale, double& shift, bool fromLog, bool toLog, double low,
+                              double high, double positive, bool hasPositive) const
+{
+    double fromA = 0.0;
+    double toA = 0.0;
+    double fractionLow = 0.0;
+    double fractionHigh = 1.0;
+    if (bandSpan(fromLog, low, high, positive, hasPositive, fromA, toA)) {
+        const Span window = lineSpan(scale, shift, fromLog, fromA, toA);
+        const Span data = padded(fromA, toA, fromLog, yLogBase_);
+        const double p0 = axisPosition(data.low, fromLog, yLogBase_);
+        const double p1 = axisPosition(data.high, fromLog, yLogBase_);
+        const double v0 = axisPosition(window.low, fromLog, yLogBase_);
+        const double v1 = axisPosition(window.high, fromLog, yLogBase_);
+        const double vis = v1 - v0;
+        if (!(vis > 0.0) || !(p1 > p0)) {
+            return false;
+        }
+        fractionLow = (p0 - v0) / vis;
+        fractionHigh = (p1 - v0) / vis;
+        if (!(fractionHigh > fractionLow)) {
+            return false;
+        }
+    }
+    double fromB = 0.0;
+    double toB = 0.0;
+    if (!bandSpan(toLog, low, high, positive, hasPositive, fromB, toB)) {
+        // Nothing on the new scale has a place. The empty decade keeps the
+        // band, and every sample is a gap.
+        if (!toLog) {
+            return false;
+        }
+        fromB = 1.0;
+        toB = usableBase(yLogBase_) ? yLogBase_ : 10.0;
+    }
+    return placeLine(scale, shift, fromB, toB, fractionLow, fractionHigh, toLog);
+}
+
+void PlotCamera::scaleLine(double& scale, double& shift, double fractionUp, double factor,
+                           bool logarithmic, double lineLow, double lineHigh) const
+{
+    if (logarithmic == yLog_) {
+        scaleLine(scale, shift, fractionUp, factor);
+        return;
+    }
+    if (!(factor > 0.0) || !std::isfinite(factor)) {
+        return;
+    }
+    if (!(scale > 0.0) || !std::isfinite(scale)) {
+        scale = 1.0;
+    }
+    double axisLow = 0.0;
+    double axisHigh = 0.0;
+    double from = 0.0;
+    double to = 0.0;
+    double full = 0.0;
+    double center = 0.0;
+    if (!viewFrame(axisLow, axisHigh, from, to) ||
+        !referenceSpan(logarithmic, lineLow, lineHigh, full, center)) {
+        return;
+    }
+    const double common = axisHigh - axisLow;
+    const double lowF = (from - axisLow) / common;
+    const double highF = (to - axisLow) / common;
+    const double viewFrac = highF - lowF;
+    if (!(viewFrac > 0.0)) {
+        return;
+    }
+    const Span window = lineSpan(scale, shift, logarithmic, lineLow, lineHigh);
+    const double visFrom = axisPosition(window.low, logarithmic, yLogBase_);
+    const double visTo = axisPosition(window.high, logarithmic, yLogBase_);
+    const double span = visTo - visFrom;
+    if (!(span > 0.0)) {
+        return;
+    }
+    const double g = std::clamp(fractionUp, 0.0, 1.0);
+    const double held = visFrom + g * span;
+    const double minSpan = full / maxZoom();
+    const double maxSpan = full;
+    double next = span / factor;
+    if (factor >= 1.0) {
+        next = std::max(next, std::min(span, minSpan));
+    } else {
+        next = std::min(next, std::max(span, maxSpan));
+    }
+    if (!(next > 0.0)) {
+        return;
+    }
+    const double newFrom = held - g * next;
+    const double newHome = next / viewFrac;
+    if (!(newHome > 0.0)) {
+        return;
+    }
+    scale = full / newHome;
+    const double homeFrom = newFrom - lowF * newHome;
+    shift = homeFrom + newHome / 2.0 - center;
+}
+
+double PlotCamera::shiftUnits(double scale, bool logarithmic, double windowLow,
+                              double windowHigh) const
+{
+    if (logarithmic == yLog_ || !(scale > 0.0)) {
+        return ySpan();
+    }
+    const double vis = axisPosition(windowHigh, logarithmic, yLogBase_) -
+                       axisPosition(windowLow, logarithmic, yLogBase_);
+    if (!(vis > 0.0) || !std::isfinite(vis)) {
+        return ySpan();
+    }
+    return vis * scale;
 }
 
 double PlotCamera::xSpan() const

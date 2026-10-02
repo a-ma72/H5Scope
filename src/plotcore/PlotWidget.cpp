@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace gui {
 namespace {
@@ -117,7 +118,54 @@ void PlotWidget::setXLog(bool on)
 
 void PlotWidget::setYLog(bool on)
 {
+    if (camera_.yLog() == on) {
+        return;
+    }
+    // The shift is in the common axis's units. Take each own window in the
+    // data's units first, or the bands jump when those units change.
+    struct Held
+    {
+        std::size_t index;
+        double low;
+        double high;
+        double lineLow;
+        double lineHigh;
+        bool yLog;
+    };
+    std::vector<Held> held;
+    if (store_ != nullptr) {
+        for (std::size_t i = 0; i < poses_.size(); ++i) {
+            if (!poses_[i].own) {
+                continue;
+            }
+            double rawLow = 0.0;
+            double rawHigh = 0.0;
+            if (!store_->lineExtent(static_cast<int>(i), rawLow, rawHigh)) {
+                continue;
+            }
+            double positive = 0.0;
+            const bool hasPositive = store_->linePositiveMinimum(static_cast<int>(i), positive);
+            double lineLow = 0.0;
+            double lineHigh = 0.0;
+            if (!PlotCamera::bandSpan(poses_[i].yLog, rawLow, rawHigh, positive, hasPositive, lineLow,
+                                      lineHigh)) {
+                continue;
+            }
+            const PlotCamera::Span window = camera_.lineSpan(
+                poses_[i].scaleY, poses_[i].shiftY, poses_[i].yLog, lineLow, lineHigh);
+            held.push_back(Held{i, window.low, window.high, lineLow, lineHigh, poses_[i].yLog});
+        }
+    }
     camera_.setYLog(on);
+    for (const Held& item : held) {
+        double scale = poses_[item.index].scaleY;
+        double shift = poses_[item.index].shiftY;
+        if (camera_.fitLine(scale, shift, item.yLog, item.lineLow, item.lineHigh, item.low,
+                            item.high)) {
+            poses_[item.index].scaleY = scale;
+            poses_[item.index].shiftY = shift;
+        }
+    }
     applyView();
 }
 
@@ -142,6 +190,61 @@ void PlotWidget::setDataExtent(double xMin, double xMax, double yMin, double yMa
 void PlotWidget::resetView()
 {
     camera_.reset();
+    applyView();
+}
+
+void PlotWidget::stackLines()
+{
+    if (store_ == nullptr) {
+        return;
+    }
+    setDataExtent(store_->xMin(), store_->xMax(), store_->minimum(), store_->maximum(),
+                  store_->xPositiveMinimum(), store_->positiveMinimum(), store_->length());
+    syncPoses();
+    const int count = store_->lineCount();
+    struct Item
+    {
+        int index;
+        double low;
+        double high;
+    };
+    std::vector<Item> items;
+    items.reserve(static_cast<std::size_t>(count));
+    for (int i = 0; i < count && i < lineCount(); ++i) {
+        double low = 0.0;
+        double high = 0.0;
+        if (!store_->lineExtent(i, low, high)) {
+            continue;
+        }
+        double positive = 0.0;
+        const bool hasPositive = store_->linePositiveMinimum(i, positive);
+        double from = 0.0;
+        double to = 0.0;
+        if (!PlotCamera::bandSpan(camera_.yLog(), low, high, positive, hasPositive, from, to)) {
+            continue;
+        }
+        items.push_back(Item{i, from, to});
+    }
+    if (items.empty()) {
+        return;
+    }
+    camera_.resetY();
+    const double bands = static_cast<double>(items.size());
+    for (std::size_t band = 0; band < items.size(); ++band) {
+        const Item& item = items[band];
+        const double at = static_cast<double>(band);
+        double scale = 1.0;
+        double shift = 0.0;
+        if (!camera_.placeLine(scale, shift, item.low, item.high, (bands - 1.0 - at) / bands,
+                               (bands - at) / bands)) {
+            continue;
+        }
+        LinePose& pose = poses_[static_cast<std::size_t>(item.index)];
+        pose.scaleY = scale;
+        pose.shiftY = shift;
+        pose.yLog = camera_.yLog();
+        pose.own = true;
+    }
     applyView();
 }
 
@@ -186,11 +289,30 @@ void PlotWidget::projectAll()
         lines_[line].yMax = view.yMax;
         PlotView drawn = view;
         if (pose.own) {
-            const PlotCamera::Span span = camera_.lineSpan(pose.scaleY, pose.shiftY);
+            double lineLow = 0.0;
+            double lineHigh = 0.0;
+            bool have = false;
+            if (store_ != nullptr) {
+                double rawLow = 0.0;
+                double rawHigh = 0.0;
+                if (store_->lineExtent(static_cast<int>(line), rawLow, rawHigh)) {
+                    double positive = 0.0;
+                    const bool hasPositive =
+                        store_->linePositiveMinimum(static_cast<int>(line), positive);
+                    have = PlotCamera::bandSpan(pose.yLog, rawLow, rawHigh, positive, hasPositive,
+                                                lineLow, lineHigh);
+                }
+            }
+            const PlotCamera::Span span =
+                have ? camera_.lineSpan(pose.scaleY, pose.shiftY, pose.yLog, lineLow, lineHigh)
+                     : camera_.lineSpan(pose.scaleY, pose.shiftY);
             drawn.yMin = span.low;
             drawn.yMax = span.high;
+            drawn.yLog = pose.yLog;
+            drawn.yLogBase = camera_.yLogBase();
             lines_[line].yMin = span.low;
             lines_[line].yMax = span.high;
+            pose.ySpan = camera_.shiftUnits(pose.scaleY, pose.yLog, span.low, span.high);
         }
         lineRuns_[line] = static_cast<int>(runs_.size());
         projectLine(lines_[line], axis_, drawn, points_, runs_);
@@ -247,9 +369,29 @@ void PlotWidget::zoomAt(const QPointF& pos, double factor, Qt::KeyboardModifiers
             return;
         }
         LinePose& pose = poses_[static_cast<std::size_t>(index)];
+        if (!pose.own) {
+            pose.yLog = camera_.yLog();
+        }
         pose.own = true;
         const double along = 1.0 - local.y() / static_cast<double>(area.height());
-        camera_.scaleLine(pose.scaleY, pose.shiftY, along, factor);
+        double lineLow = 0.0;
+        double lineHigh = 0.0;
+        bool have = false;
+        if (store_ != nullptr) {
+            double rawLow = 0.0;
+            double rawHigh = 0.0;
+            if (store_->lineExtent(index, rawLow, rawHigh)) {
+                double positive = 0.0;
+                const bool hasPositive = store_->linePositiveMinimum(index, positive);
+                have = PlotCamera::bandSpan(pose.yLog, rawLow, rawHigh, positive, hasPositive, lineLow,
+                                            lineHigh);
+            }
+        }
+        if (have) {
+            camera_.scaleLine(pose.scaleY, pose.shiftY, along, factor, pose.yLog, lineLow, lineHigh);
+        } else {
+            camera_.scaleLine(pose.scaleY, pose.shiftY, along, factor);
+        }
         applyView();
         return;
     }
@@ -341,12 +483,9 @@ void PlotWidget::drawChrome(QPainter& painter, const QRect& area)
     painter.setPen(QPen(ink_, 1.0));
     painter.drawRect(area.adjusted(0, 0, -1, -1));
     int slot = 0;
-    for (const PlotLine& line : lines_) {
+    for (std::size_t index = 0; index < lines_.size(); ++index) {
+        const PlotLine& line = lines_[index];
         if (!line.ownY || !(line.yMax > line.yMin)) {
-            continue;
-        }
-        const double step = niceStep(line.yMax - line.yMin, kTickTarget);
-        if (!(step > 0.0)) {
             continue;
         }
         painter.setPen(line.colour);
@@ -354,12 +493,37 @@ void PlotWidget::drawChrome(QPainter& painter, const QRect& area)
         PlotView own = view;
         own.yMin = line.yMin;
         own.yMax = line.yMax;
-        const double first = std::ceil(line.yMin / step) * step;
-        for (double y = first; y <= line.yMax + step * 0.5; y += step) {
-            const double fraction = yFractionOf(y, own);
-            const int py = area.bottom() - static_cast<int>(std::lround(fraction * area.height()));
-            painter.drawText(QRect(column, py - 8, kOwnColumn - 6, 16), Qt::AlignRight | Qt::AlignVCenter,
-                             QString::number(y, 'g', 6));
+        own.yLog = index < poses_.size() && poses_[index].yLog;
+        own.yLogBase = camera_.yLogBase();
+        if (own.yLog && own.yLogBase > 1.0 && line.yMin > 0.0 && line.yMax > line.yMin) {
+            const double firstExp = std::ceil(std::log(line.yMin) / std::log(own.yLogBase) - 1e-9);
+            for (int step = 0; step < 12; ++step) {
+                const double y = std::pow(own.yLogBase, firstExp + step);
+                if (y > line.yMax * (1.0 + 1e-9)) {
+                    break;
+                }
+                const double fraction = yFractionOf(y, own);
+                if (!std::isfinite(fraction)) {
+                    continue;
+                }
+                const int py = area.bottom() - static_cast<int>(std::lround(fraction * area.height()));
+                painter.drawText(QRect(column, py - 8, kOwnColumn - 6, 16),
+                                 Qt::AlignRight | Qt::AlignVCenter, QString::number(y, 'g', 6));
+            }
+        } else {
+            const double step = niceStep(line.yMax - line.yMin, kTickTarget);
+            if (!(step > 0.0)) {
+                ++slot;
+                continue;
+            }
+            const double first = std::ceil(line.yMin / step) * step;
+            for (double y = first; y <= line.yMax + step * 0.5; y += step) {
+                const double fraction = yFractionOf(y, own);
+                const int py =
+                    area.bottom() - static_cast<int>(std::lround(fraction * area.height()));
+                painter.drawText(QRect(column, py - 8, kOwnColumn - 6, 16),
+                                 Qt::AlignRight | Qt::AlignVCenter, QString::number(y, 'g', 6));
+            }
         }
         ++slot;
     }
@@ -406,6 +570,9 @@ void PlotWidget::shiftLine(int index, double /*dx*/, double dy)
     }
     LinePose& pose = poses_[static_cast<std::size_t>(index)];
     const QRect area = plotArea();
+    if (!pose.own) {
+        pose.yLog = camera_.yLog();
+    }
     pose.own = true;
     const double scale = pose.scaleY > 0.0 ? pose.scaleY : 1.0;
     if (area.height() > 0 && pose.ySpan != 0.0) {

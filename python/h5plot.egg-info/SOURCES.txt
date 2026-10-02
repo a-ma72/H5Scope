@@ -5,6 +5,7 @@ h5plot/__init__.py
 h5plot/demo.py
 h5plot/demo_mpl.py
 h5plot/h5plot.dll
+h5plot/h5plot_old.dll
 h5plot/lib.py
 h5plot/mpl.py
 h5plot/widget.py

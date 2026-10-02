@@ -122,6 +122,10 @@ public:
     [[nodiscard]] int sharedCount() const { return shared_; }
     [[nodiscard]] bool lineExtent(int index, double& low, double& high) const;
 
+    /// The smallest value above zero on this line. False when there is none.
+    /// A logarithmic band starts here: a bound at or below zero is not a place.
+    [[nodiscard]] bool linePositiveMinimum(int index, double& out) const;
+
     /// Write the current folds into `lines` / `axis`. Pointers stay valid
     /// until the next fillInto, clearLines, or a rebuild that retires them --
     /// call releaseRetired() only after the renderer has been handed the new

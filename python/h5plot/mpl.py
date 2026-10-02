@@ -38,6 +38,7 @@ class MplView:
         self._own: list = []
         self._artists: list = []
         self._band = None
+        self._band_xy = None
         self._band_artist = None
         self._band_labels: list = []
         self._hair_v = None
@@ -68,6 +69,12 @@ class MplView:
         self._base_ax = self.figure.add_axes([0.48, 0.01, 0.14, 0.07])
         self._base_button = Button(self._base_ax, "base 10")
         self._base_button.on_clicked(self._cycle_base)
+        self._stack_ax = self.figure.add_axes([0.64, 0.01, 0.14, 0.07])
+        self._stack_button = Button(self._stack_ax, "Stack")
+        self._stack_button.on_clicked(self._stack)
+
+    def _stack(self, _event) -> None:
+        self.stack_lines()
 
     def _scale(self, label: str) -> None:
         status = dict(zip(("Log x", "Log y"), self._scales.get_status()))
@@ -85,6 +92,11 @@ class MplView:
         self.plot.set_x_log_base(base)
         self.plot.set_y_log_base(base)
         self._base_button.label.set_text("base e" if self._log_base_i == 2 else f"base {int(base)}")
+        self.redraw()
+
+    def stack_lines(self) -> None:
+        """Lay every line in an equal band, the first at the top."""
+        self.plot.stack_lines()
         self.redraw()
 
     def set_range(self, x0=None, x1=None, y0=None, y1=None) -> None:
@@ -182,11 +194,12 @@ class MplView:
                     outward += _SPINE
                 own_slot += 1
                 axes = self._own_axes(colour, outward)
+                axes.h5_line = line
                 self._own.append(axes)
                 low, high = self.plot.line_y_range(line)
                 axes.set_yscale("linear")
                 axes.set_ylim(low, high)
-                if self.plot.y_log() and low > 0.0 and high > low:
+                if self.plot.line_y_log(line) and low > 0.0 and high > low:
                     axes.set_yscale("log", base=self.plot.y_log_base())
                 # The column is that curve, so it carries the curve's name.
                 name = self.plot.line_name(line)
@@ -196,8 +209,12 @@ class MplView:
                 axes = self.ax
             # The same room as the Qt window. The run is wider than the
             # view, so only the samples the axes are showing are counted.
+            # A logarithmic axis leaves the non-positive samples out, and
+            # the count then says the rest are a screen apart. They are
+            # still a summary until the zoom draws the samples themselves.
             shown = int(np.count_nonzero(np.isfinite(x) & (x >= x0) & (x <= x1)))
-            mark = "o" if _mark_samples(shown, width) else None
+            summarised = any(run.summarised for run in line_runs)
+            mark = "o" if not summarised and _mark_samples(shown, width) else None
             drawn, = axes.plot(
                 x, y, color=colour, linewidth=max(float(line_runs[0].width), 0.8),
                 solid_capstyle="butt", marker=mark, markersize=5 if mark else 0,
@@ -208,7 +225,12 @@ class MplView:
                 handles.append(drawn)
                 drawn.set_label(name)
         named = sum(1 for column in self._own if column.get_ylabel())
-        self.figure.subplots_adjust(left=0.12 + 0.06 * own_slot + 0.05 * named, bottom=0.2)
+        # The spines are a fixed number of points apart, and a name sits on
+        # its spine. A share of the figure per curve, and again per name,
+        # left an empty third once four curves were stacked: the margin grew
+        # with the count, and the spines did not fill it.
+        self.figure.subplots_adjust(left=self._left_margin(own_slot, shared, bool(named)),
+                                    bottom=0.2)
         if handles:
             # On the common axes the legend is drawn before a shifted curve's
             # axes, so that curve runs through the names. A figure legend is
@@ -221,6 +243,26 @@ class MplView:
             )
             legend.set_zorder(20)
             self._artists.append(legend)
+
+    def _left_margin(self, own_slot: int, shared: bool, named: bool) -> float:
+        """Figure fraction that clears the leftmost spine and its labels."""
+        if own_slot <= 0:
+            return 0.12
+        fig_pt = self.figure.get_figwidth() * 72.0
+        if not fig_pt > 0.0:
+            return 0.12
+        # The first own spine lies on the axes when nothing is shared, and
+        # one step out when the common spine is still there.
+        outermost = _SPINE * (own_slot - 1)
+        if shared:
+            outermost += _SPINE
+        tick_pt = 32.0
+        name_pt = 16.0 if named else 0.0
+        # The common labels need a gutter even when no own spine sticks out
+        # past them. The larger of the two is what the figure has to clear.
+        common_pt = (28.0 + tick_pt) if shared else 0.0
+        gutter = max(common_pt, outermost + tick_pt + name_pt) + 6.0
+        return gutter / fig_pt
 
     def _own_axes(self, colour, outward: float):
         # twinx is how the x axis is shared. The spine does not stay where
@@ -249,6 +291,63 @@ class MplView:
 
     def _resized(self, _event) -> None:
         self._drawn(_event)
+
+    def _own_at_display(self, x, y):
+        if x is None or y is None:
+            return None
+        pane = self.ax.bbox
+        if pane.x0 <= x <= pane.x1 and pane.y0 <= y <= pane.y1:
+            return None
+        renderer = self.figure.canvas.get_renderer()
+        for axes in self._own:
+            boxes = [axes.yaxis.label.get_window_extent(renderer)]
+            ticks = axes.yaxis.get_tightbbox(renderer)
+            if ticks is not None:
+                boxes.append(ticks)
+            for box in boxes:
+                if box is None or box.width < 0 or box.height < 0:
+                    continue
+                if box.x0 - 6 <= x <= box.x1 + 6 and box.y0 - 2 <= y <= box.y1 + 2:
+                    return getattr(axes, "h5_line", None)
+        return None
+
+    def _axis_menu(self, index: int) -> None:
+        was = self.plot.line_y_log(index)
+
+        def apply(on: bool) -> None:
+            self.plot.set_line_y_log(index, on)
+            self.redraw()
+
+        canvas = self.figure.canvas
+        module = type(canvas).__module__.lower()
+        if "qt" in module:
+            menu_type = cursor = None
+            for package in ("PySide6", "PyQt6", "PyQt5"):
+                try:
+                    widgets = __import__(package + ".QtWidgets", fromlist=["QMenu"])
+                    gui = __import__(package + ".QtGui", fromlist=["QCursor"])
+                except ImportError:
+                    continue
+                menu_type = widgets.QMenu
+                cursor = gui.QCursor
+                break
+            if menu_type is not None and cursor is not None:
+                menu = menu_type()
+                action = menu.addAction("Logarithmisch")
+                action.setCheckable(True)
+                action.setChecked(was)
+                if menu.exec(cursor.pos()) is action:
+                    apply(not was)
+                return
+        if "tk" in module or hasattr(canvas, "get_tk_widget"):
+            import tkinter as tk
+
+            widget = canvas.get_tk_widget()
+            menu = tk.Menu(widget, tearoff=0)
+            var = tk.BooleanVar(value=was)
+            menu.add_checkbutton(label="Logarithmisch", variable=var,
+                                 command=lambda: apply(bool(var.get())))
+            menu.tk_popup(widget.winfo_pointerx(), widget.winfo_pointery())
 
     def _hide_toolbar(self) -> None:
         manager = getattr(self.figure.canvas, "manager", None)
@@ -308,6 +407,7 @@ class MplView:
             return
         if event.button == 3:
             self._band = (at, at)
+            self._band_xy = (event.x, event.y)
             return
         if event.button == 1:
             self._drag = at
@@ -340,10 +440,20 @@ class MplView:
             return
         if event.button == 3 and self._band is not None:
             start, end = self._band
+            origin = self._band_xy
             self._band = None
+            self._band_xy = None
             self._hide_band()
+            # Twelve pixels on either side is a window. Anything shorter was
+            # a click, and a click on an own axis opens that axis's menu.
+            # A click in the pane is kept for later and opens nothing.
             if self.plot.zoom_rect(start[0], start[1], end[0], end[1]):
                 self.redraw()
+                return
+            if origin is not None:
+                index = self._own_at_display(origin[0], origin[1])
+                if index is not None:
+                    self._axis_menu(index)
             return
         if event.button == 1:
             self._drag = None
@@ -445,7 +555,8 @@ class MplView:
         parts = [
             _reading_number(reading.x, self.plot.view_max_x() - self.plot.view_min_x(),
                             self.plot.x_log()),
-            _reading_number(reading.y, _y_span(self.plot, reading.line), self.plot.y_log()),
+            _reading_number(reading.y, _y_span(self.plot, reading.line),
+                            self.plot.line_y_log(reading.line)),
         ]
         name = self.plot.line_name(reading.line)
         if name and self.plot.line_count() > 1:
