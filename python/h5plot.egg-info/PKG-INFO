@@ -9,3 +9,5 @@ Requires-Dist: numpy
 Requires-Dist: PySide6
 Provides-Extra: matplotlib
 Requires-Dist: matplotlib>=3.8; extra == "matplotlib"
+Provides-Extra: rpc3
+Requires-Dist: rpc3-file>=1.0.0rc6; extra == "rpc3"

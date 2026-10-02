@@ -396,6 +396,20 @@ class PlotWidget(QWidget):
         self._y_label = str(text).strip() if text else ""
         self._reproject()
 
+    def show_lines(self, fill) -> None:
+        """Replace every line, then draw once.
+
+        ``fill(plot)`` writes the lines and returns ``(x label, y label)``.
+        ``add_line`` and ``set_line_x`` reset the view and repaint on every
+        call, which is one picture per channel when a selection changes.
+        """
+        labels = fill(self._plot)
+        x_label, y_label = ("", "") if not labels else labels
+        self._plot.reset_view()
+        self._x_label = str(x_label).strip() if x_label else ""
+        self._y_label = str(y_label).strip() if y_label else ""
+        self._reproject()
+
     def _reproject(self):
         _left, _top, width, height = self._pane()
         ratio = float(self.devicePixelRatioF())

@@ -8,6 +8,7 @@ h5plot/h5plot.dll
 h5plot/h5plot_old.dll
 h5plot/lib.py
 h5plot/mpl.py
+h5plot/rpc3view.py
 h5plot/widget.py
 h5plot.egg-info/PKG-INFO
 h5plot.egg-info/SOURCES.txt

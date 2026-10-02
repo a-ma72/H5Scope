@@ -24,15 +24,19 @@ _SPINE = 48
 
 
 class MplView:
-    def __init__(self, plot: Plot | None = None):
+    def __init__(self, plot: Plot | None = None, figure=None):
         try:
-            import matplotlib.pyplot as plt
+            from matplotlib.widgets import Button, CheckButtons
         except ImportError as error:
             raise ImportError(
                 "matplotlib is not installed; pip install h5plot[matplotlib]"
             ) from error
         self.plot = plot if plot is not None else Plot()
-        self.figure = plt.figure()
+        if figure is None:
+            import matplotlib.pyplot as plt
+
+            figure = plt.figure()
+        self.figure = figure
         self.ax = self.figure.add_subplot(111)
         self.ax.set_navigate(False)
         self._own: list = []
@@ -58,8 +62,6 @@ class MplView:
         canvas.mpl_connect("resize_event", self._resized)
         # The same two switches the Qt window offers. A scale you cannot reach
         # is a linear axis, whatever the camera was asked for.
-        from matplotlib.widgets import Button, CheckButtons
-
         self._scale_ax = self.figure.add_axes([0.12, 0.01, 0.34, 0.07])
         self._scale_ax.set_frame_on(False)
         self._scales = CheckButtons(self._scale_ax, ["Log x", "Log y"], [False, False])
@@ -108,6 +110,20 @@ class MplView:
 
     def set_y_label(self, text: str) -> None:
         self.ax.set_ylabel(text or "")
+
+    def show_lines(self, fill) -> None:
+        """Replace every line, then draw once.
+
+        ``fill(plot)`` writes the lines and returns ``(x label, y label)``.
+        The view resets once, after the lines are in, rather than on every
+        channel the way ``PlotWidget.add_line`` does.
+        """
+        labels = fill(self.plot)
+        x_label, y_label = ("", "") if not labels else labels
+        self.plot.reset_view()
+        self.set_x_label(x_label)
+        self.set_y_label(y_label)
+        self.redraw()
 
     def show(self) -> None:
         import matplotlib.pyplot as plt
