@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "h5plot"
-version = "0.3.1"
+version = "0.3.2"
 description = "Look at large 1-D arrays from RAM: an envelope, several curves, one window."
 requires-python = ">=3.11"
 license = "GPL-3.0-only"
