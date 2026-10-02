@@ -966,6 +966,11 @@ int h5plot_project(H5Plot* plot)
         return 0;
     }
     plot->store.setPaneColumns(plot->paneColumns());
+    const double ySpan = plot->camera.viewMaxY() - plot->camera.viewMinY();
+    const double yPixels = std::max(1.0, static_cast<double>(plot->height) * plot->pixelRatio);
+    const double yPerPixel =
+        !plot->camera.yLog() && ySpan > 0.0 && std::isfinite(ySpan) ? ySpan / yPixels : 0.0;
+    plot->store.setYPerPixel(yPerPixel);
     plot->store.setVisibleRange(plot->camera.viewMinX(), plot->camera.viewMaxX());
     plot->store.fillInto(plot->lines, plot->axis);
     plot->syncExtent();

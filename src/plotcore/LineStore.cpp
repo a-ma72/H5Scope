@@ -273,8 +273,14 @@ void LineStore::retireBuffers(Entry& entry)
     if (!entry.whole.empty()) {
         retired_.push_back(std::move(entry.whole));
     }
+    if (!entry.wholePositions.empty()) {
+        retired_.push_back(std::move(entry.wholePositions));
+    }
     if (!entry.closer.empty()) {
         retired_.push_back(std::move(entry.closer));
+    }
+    if (!entry.closerPositions.empty()) {
+        retired_.push_back(std::move(entry.closerPositions));
     }
 }
 
@@ -478,6 +484,31 @@ void LineStore::setPaneColumns(int columns)
     emitChanged();
 }
 
+void LineStore::setYPerPixel(double value)
+{
+    if (!(value > 0.0) || !std::isfinite(value)) {
+        value = 0.0;
+    }
+    const double scale = std::max(std::abs(yPerPixel_), std::abs(value));
+    if (value == yPerPixel_ || (scale > 0.0 && std::abs(value - yPerPixel_) <= scale * 1e-3)) {
+        return;
+    }
+    yPerPixel_ = value;
+    // The index window has not moved. The chords were judged against a
+    // different pixel, so the runs are no longer the picture.
+    for (Entry& entry : lines_) {
+        entry.closerValid = false;
+        if (entry.time != nullptr) {
+            entry.time->closerValid = false;
+        }
+    }
+    if (hasAxis_) {
+        axis_.closerValid = false;
+    }
+    refreshCloser();
+    emitChanged();
+}
+
 void LineStore::setVisibleRange(double xMin, double xMax)
 {
     // The same window, already turned into positions. Asking again would
@@ -579,8 +610,17 @@ void LineStore::fillInto(std::vector<PlotLine>& lines, PlotAxis& axis)
     // A logarithmic fold already stated its own x. The linear fold of a line
     // with its own time still has to: the shared axis is a different index.
     for (Entry& entry : lines_) {
-        if (entry.hasTime && !entry.foldValid) {
+        if (entry.foldValid) {
+            continue;
+        }
+        // Own time wins. Otherwise a shared clock still has to be read at the
+        // sample the point names. The axis summary is one station per bucket,
+        // and a point added between the extremes is not one of those stations.
+        if (entry.hasTime) {
             placeOwnTimes(entry);
+        }
+        else if (hasAxis_) {
+            placeTimes(entry, axis_);
         }
     }
     lines.clear();
@@ -636,12 +676,20 @@ void LineStore::rebuildWhole(Entry& entry)
 {
     long long stride = 1;
     double step = 1.0;
-    if (!fillWhole(entry.pyramid, cap_ / 2, entry.whole, stride, step)) {
+    std::vector<double> positions;
+    if (!fillWhole(entry.pyramid, cap_ / 2, entry.whole, stride, step, &positions)) {
         entry.whole.clear();
+        entry.wholePositions.clear();
         entry.wholeStride = 1;
         entry.wholeStep = 1.0;
         entry.wholeSummarised = false;
         return;
+    }
+    if (positions.size() == entry.whole.size()) {
+        entry.wholePositions = std::move(positions);
+    }
+    else {
+        entry.wholePositions.clear();
     }
     entry.wholeStride = stride;
     entry.wholeStep = step;
@@ -708,36 +756,61 @@ void LineStore::refreshEntry(Entry& entry, const std::optional<PlotWindow>& want
     if (!wanted.has_value()) {
         if (entry.closerValid) {
             retired_.push_back(std::move(entry.closer));
+            if (!entry.closerPositions.empty()) {
+                retired_.push_back(std::move(entry.closerPositions));
+            }
             entry.closerValid = false;
         }
         return;
     }
-    if (entry.closerValid && entry.closerWindow == *wanted) {
+    if (entry.closerValid && entry.closerWindow == *wanted && entry.closerY == yPerPixel_) {
         return;
     }
     std::vector<double> folded;
+    std::vector<double> positions;
     // The pyramid answers every window at or above its base. Below that
     // the samples are not in memory, and only the reader — the file, or
     // the borrowed buffer — still has them. Without one, the whole-line
     // summary stays up.
-    if (!fillWindow(entry.pyramid, *wanted, folded) && !readWindow(entry, *wanted, folded)) {
+    if (!fillWindow(entry.pyramid, *wanted, folded, &positions) &&
+        !readWindow(entry, *wanted, folded, &positions)) {
         if (entry.closerValid) {
             retired_.push_back(std::move(entry.closer));
+            if (!entry.closerPositions.empty()) {
+                retired_.push_back(std::move(entry.closerPositions));
+            }
             entry.closerValid = false;
         }
         return;
     }
     if (entry.closerValid) {
         retired_.push_back(std::move(entry.closer));
+        if (!entry.closerPositions.empty()) {
+            retired_.push_back(std::move(entry.closerPositions));
+        }
     }
+    if (positions.size() != folded.size()) {
+        positions.clear();
+    }
+    else if (yPerPixel_ > 0.0) {
+        // One pixel of y. The budget is a few points a column: past that the
+        // chord is kept, which is the envelope the pane was already drawing.
+        followCurve(entry.pyramid, folded, positions, yPerPixel_, std::max(columns_, 32) * 8);
+    }
+    entry.closerPositions = std::move(positions);
     entry.closer = std::move(folded);
     entry.closerWindow = *wanted;
     entry.closerStep = wanted->bucket == 1 ? 1.0 : static_cast<double>(wanted->bucket) / 2.0;
+    entry.closerY = yPerPixel_;
     entry.closerValid = true;
 }
 
-bool LineStore::readWindow(Entry& entry, const PlotWindow& window, std::vector<double>& folded)
+bool LineStore::readWindow(Entry& entry, const PlotWindow& window, std::vector<double>& folded,
+                           std::vector<double>* positions)
 {
+    if (positions != nullptr) {
+        positions->clear();
+    }
     if (window.span <= 0 || window.first < 0) {
         return false;
     }
@@ -761,7 +834,13 @@ bool LineStore::readWindow(Entry& entry, const PlotWindow& window, std::vector<d
         return true;
     }
     folded.clear();
-    reduceBuckets(raw.data(), window.span, window.bucket, folded);
+    if (positions == nullptr) {
+        reduceBuckets(raw.data(), window.span, window.bucket, folded);
+    }
+    else {
+        reduceBucketsLocated(raw.data(), window.span, window.bucket, window.first, folded,
+                             *positions);
+    }
     return !folded.empty();
 }
 
@@ -1001,15 +1080,22 @@ PlotLine LineStore::lineOf(const Entry& entry) const
         line.positionStart = static_cast<double>(entry.closerWindow.first);
         line.positionStep = entry.closerStep;
         line.summarised = entry.closerWindow.bucket > 1;
+        if (entry.closerPositions.size() == entry.closer.size()) {
+            line.positions = entry.closerPositions.data();
+        }
     } else if (!entry.whole.empty()) {
         line.values = entry.whole.data();
         line.count = static_cast<qsizetype>(entry.whole.size());
         line.positionStep = entry.wholeStep;
         line.summarised = entry.wholeSummarised;
+        if (entry.wholePositions.size() == entry.whole.size()) {
+            line.positions = entry.wholePositions.data();
+        }
     }
     // Stated x wins over the shared axis. xOf reads xs and never the position.
-    if (entry.hasTime && line.values != nullptr &&
-        static_cast<qsizetype>(entry.placedXs.size()) == line.count) {
+    // Filled for a line's own time and for the shared clock, at the sample
+    // each point names.
+    if (line.values != nullptr && static_cast<qsizetype>(entry.placedXs.size()) == line.count) {
         line.xs = entry.placedXs.data();
     }
     return line;
@@ -1023,26 +1109,27 @@ void LineStore::placeOwnTimes(Entry& entry)
         }
         return;
     }
-    const Entry& time = *entry.time;
+    placeTimes(entry, *entry.time);
+}
+
+void LineStore::placeTimes(Entry& entry, const Entry& time)
+{
     const std::vector<double>* values = nullptr;
-    const std::vector<double>* source = nullptr;
+    const std::vector<double>* at = nullptr;
     double start = 0.0;
     double step = 1.0;
     if (entry.closerValid && !entry.closer.empty()) {
         values = &entry.closer;
         start = static_cast<double>(entry.closerWindow.first);
         step = entry.closerStep;
-        // The same index window, so each drawn y is the time of that station.
-        // Below the pyramid's base that is a read timeAt cannot see.
-        if (time.closerValid && time.closerWindow == entry.closerWindow &&
-            time.closer.size() == entry.closer.size()) {
-            source = &time.closer;
+        if (entry.closerPositions.size() == entry.closer.size()) {
+            at = &entry.closerPositions;
         }
     } else if (!entry.whole.empty()) {
         values = &entry.whole;
         step = entry.wholeStep;
-        if (time.whole.size() == entry.whole.size() && time.wholeStep == entry.wholeStep) {
-            source = &time.whole;
+        if (entry.wholePositions.size() == entry.whole.size()) {
+            at = &entry.wholePositions;
         }
     }
     if (values == nullptr) {
@@ -1051,15 +1138,13 @@ void LineStore::placeOwnTimes(Entry& entry)
         }
         return;
     }
-    std::vector<double> xs;
-    if (source != nullptr) {
-        xs = *source;
-    } else {
-        xs.resize(values->size());
-        for (std::size_t i = 0; i < xs.size(); ++i) {
-            const double at = start + static_cast<double>(i) * step;
-            xs[i] = timeAt(time, std::llround(at));
-        }
+    // The time of the sample the extreme occurred at, not the extreme of the
+    // time in the same bucket. Those are different samples, and drawing the
+    // y extreme against the time extreme puts the point at neither of them.
+    std::vector<double> xs(values->size());
+    for (std::size_t i = 0; i < xs.size(); ++i) {
+        const double index = at != nullptr ? (*at)[i] : start + static_cast<double>(i) * step;
+        xs[i] = timeAt(time, std::llround(index));
     }
     if (xs == entry.placedXs) {
         return;

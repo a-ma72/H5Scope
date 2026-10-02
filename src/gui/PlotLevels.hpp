@@ -75,6 +75,11 @@ struct Extremes
     /// descending pair in the line the other way up.
     [[nodiscard]] double first() const { return lowAt <= highAt ? lowest : highest; }
     [[nodiscard]] double second() const { return lowAt <= highAt ? highest : lowest; }
+
+    /// Where each of those sat. The earlier one, then the later one -- the
+    /// same order `first()` and `second()` name the values in.
+    [[nodiscard]] long long firstAt() const { return lowAt <= highAt ? lowAt : highAt; }
+    [[nodiscard]] long long secondAt() const { return lowAt <= highAt ? highAt : lowAt; }
 };
 
 /// The extremes of `values[from, to)`, skipping whatever is not finite.
@@ -98,6 +103,18 @@ struct Extremes
 /// sample for sample.
 void reduceBuckets(const double* values, long long count, long long bucket,
                    std::vector<double>& out);
+
+/// The same fold, and where each extreme occurred.
+///
+/// `origin` is the element index of `values[0]`. `positions` receives one
+/// index per value appended to `out`, in the same order: the sample
+/// `extremesOf` already found and `reduceBuckets` used to throw away. A bucket
+/// with nothing finite in it is a pair of NaN at its own start, which is a
+/// gap and is not drawn. A bucket of one element is that element twice, at
+/// its own index twice -- callers that draw samples pass bucket one through
+/// the other path and never ask this.
+void reduceBucketsLocated(const double* values, long long count, long long bucket, long long origin,
+                          std::vector<double>& out, std::vector<double>& positions);
 
 /// The same fold, written straight into `out`.
 ///

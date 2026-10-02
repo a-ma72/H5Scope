@@ -66,6 +66,9 @@ public:
     [[nodiscard]] double viewMaxY() const { return camera_.viewMaxY(); }
 
     [[nodiscard]] int paneColumns() const;
+    /// One device pixel of the pane, in y units. Zero on a logarithmic y,
+    /// where a pixel is not a fixed value.
+    [[nodiscard]] double yPerPixel() const;
     [[nodiscard]] int lineCount() const { return static_cast<int>(lines_.size()); }
     [[nodiscard]] int drawnPointCount() const { return drawnPoints_; }
     [[nodiscard]] int drawnRunCount() const { return drawnRuns_; }

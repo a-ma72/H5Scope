@@ -248,6 +248,19 @@ void PlotWidget::stackLines()
     applyView();
 }
 
+double PlotWidget::yPerPixel() const
+{
+    if (camera_.yLog()) {
+        return 0.0;
+    }
+    const double span = viewMaxY() - viewMinY();
+    const double pixels = std::max(1.0, plotArea().height() * devicePixelRatioF());
+    if (!(span > 0.0) || !std::isfinite(span)) {
+        return 0.0;
+    }
+    return span / pixels;
+}
+
 int PlotWidget::paneColumns() const
 {
     const qreal ratio = devicePixelRatioF();
@@ -329,6 +342,7 @@ void PlotWidget::refill()
     }
     refilling_ = true;
     store_->setPaneColumns(paneColumns());
+    store_->setYPerPixel(yPerPixel());
     store_->setVisibleRange(viewMinX(), viewMaxX());
     std::vector<PlotLine> lines;
     PlotAxis axis;
@@ -343,6 +357,7 @@ void PlotWidget::refill()
 void PlotWidget::applyView()
 {
     if (store_ != nullptr) {
+        store_->setYPerPixel(yPerPixel());
         store_->setVisibleRange(viewMinX(), viewMaxX());
     }
     update();

@@ -114,6 +114,11 @@ public:
     void setPaneColumns(int columns);
     void setVisibleRange(double xMin, double xMax);
 
+    /// One pixel of the pane, in y units. The closer look uses it to bend a
+    /// chord that leaves the curve by more than that. Zero leaves the two
+    /// extremes of each bucket as they are. A change refolds the runs in hand.
+    void setYPerPixel(double value);
+
     /// A line on an axis of its own leaves the common extent. The request is
     /// kept on the line; the common minimum and maximum are only the lines
     /// still on the common axis.
@@ -153,12 +158,20 @@ private:
         QColor colour;
         LinePyramid pyramid;
         std::vector<double> whole;
+        /// Element index of each value in `whole`, when it is an envelope.
+        std::vector<double> wholePositions;
         std::vector<double> closer;
+        /// Element index of each value in `closer`. Empty when the run is the
+        /// samples themselves.
+        std::vector<double> closerPositions;
         long long wholeStride = 1;
         double wholeStep = 1.0;
         bool wholeSummarised = false;
         PlotWindow closerWindow;
         double closerStep = 1.0;
+        /// The y pixel the chord was bent with. A different one is a different
+        /// picture, even on the same index window.
+        double closerY = 0.0;
         bool closerValid = false;
         std::vector<double> foldValues;
         std::vector<double> foldXs;
@@ -203,9 +216,12 @@ private:
     [[nodiscard]] bool indexSpan(Entry& time, double t0, double t1, double& low, double& high);
     void refreshEntry(Entry& entry, const std::optional<PlotWindow>& wanted);
     [[nodiscard]] bool readWindow(Entry& entry, const PlotWindow& window,
-                                  std::vector<double>& folded);
+                                  std::vector<double>& folded,
+                                  std::vector<double>* positions = nullptr);
     [[nodiscard]] bool positionOf(Entry& entry, double x, double& position, double& resolution);
     void placeOwnTimes(Entry& entry);
+    /// `placedXs[i]` is the time of the sample point `i` names.
+    void placeTimes(Entry& entry, const Entry& time);
     void recount();
     /// The union of the shared axis and every line's own time. False when
     /// there is no time at all, and x is the sample index.
@@ -224,6 +240,8 @@ private:
     int cap_ = kMinPoints;
     double viewMin_ = 0.0;
     double viewMax_ = 1.0;
+    /// Value units per device pixel of y. See setYPerPixel.
+    double yPerPixel_ = 0.0;
     double askedMin_ = 0.0;
     double askedMax_ = 1.0;
     bool asked_ = false;

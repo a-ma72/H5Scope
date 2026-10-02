@@ -77,6 +77,17 @@ struct PlotLine
     const double* values = nullptr;
     qsizetype count = 0;
 
+    /// Element position of `values[i]`, when the line states one per point.
+    ///
+    /// An envelope's two extremes did not occur half a bucket apart. The index
+    /// each one sat at is here, `count` of them, borrowed on the same terms as
+    /// `values`. The axis still turns that position into an x -- a time base
+    /// included -- which is what `xs` does not do: `xs` is the x itself.
+    /// Absent, the point sits at `positionStart + i * positionStep`, and that
+    /// step stays half a bucket so a window can still be turned back into a
+    /// range of indices.
+    const double* positions = nullptr;
+
     /// Where sample `i` sits along the shared axis, before the axis turns a
     /// position into an x: `positionStart + i * positionStep`.
     ///

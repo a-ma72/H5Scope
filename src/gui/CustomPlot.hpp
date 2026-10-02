@@ -448,9 +448,12 @@ private:
     {
         PlotWindow window;
         /// Elements of this line between one of its drawn points and the next.
-        /// Half a bucket, as `Entry::step` is.
+        /// Half a bucket, as `Entry::step` is. The extreme is drawn at
+        /// `positions` when the run has them.
         double step = 1.0;
         std::vector<double> values;
+        /// Element index of each value. Empty when `values` are the samples.
+        std::vector<double> positions;
 
     };
 
@@ -488,6 +491,13 @@ private:
         /// Filled by the last read.
         QString problem;
         std::vector<double> values;
+        /// Element index of each value in `values`, when they are an envelope.
+        /// Borrowed with them. Empty for a line drawn sample for sample.
+        std::vector<double> positions;
+        /// `positions` multiplied by the stretch, when the line is stretched.
+        /// Built in lineOf and borrowed for that frame. Align points at
+        /// `positions` directly.
+        mutable std::vector<double> scaledPositions;
         double step = 1.0;    ///< axis positions between drawn points
         /// Whether those values are an envelope rather than the elements. See
         /// PlotLine::summarised, which is what this is read into: a dot on a

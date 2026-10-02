@@ -719,6 +719,90 @@ TEST_CASE("any run's extremes come out of the pyramid as the elements' own",
     }
 }
 
+TEST_CASE("an extreme is found at the sample it occurred at", "[levels][pyramid]")
+{
+    // A bucket whose maximum is its last sample. Reporting that at the
+    // bucket's middle puts the rise a column early: the line from the
+    // minimum to the middle is split evenly, and the spike was not in
+    // the middle.
+    constexpr long long kCount = 64;
+    std::vector<double> line(static_cast<std::size_t>(kCount), 0.0);
+    line[15] = 100.0;
+
+    SECTION("a base of one names the sample")
+    {
+        const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), kCount, 1);
+        std::vector<double> values;
+        std::vector<double> positions;
+        REQUIRE(gui::fillWindow(pyramid, gui::PlotWindow{0, kCount, 16, 4}, values, &positions));
+        REQUIRE(values.size() >= 2);
+        REQUIRE(positions.size() == values.size());
+        CHECK(values[0] == 0.0);
+        CHECK(values[1] == 100.0);
+        CHECK(positions[0] == 0.0);
+        CHECK(positions[1] == 15.0);
+
+        const gui::Extremes found = gui::extremesOver(pyramid, 0, 16);
+        REQUIRE(found.found());
+        CHECK(found.highest == 100.0);
+        CHECK(found.highAt == 15);
+        CHECK(found.lowAt == 0);
+    }
+
+    SECTION("a coarser base stops on that base, not on the drawn bucket's middle")
+    {
+        // Base 16 holds the spike and cannot open it. The stand-in is the
+        // middle of that base bucket, eight, rather than the middle of the
+        // drawn bucket of 64, which would be thirty-two.
+        const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), kCount, 16);
+        std::vector<double> values;
+        std::vector<double> positions;
+        REQUIRE(gui::fillWindow(pyramid, gui::PlotWindow{0, kCount, 64, 1}, values, &positions));
+        REQUIRE(positions.size() >= 2);
+        CHECK(values[1] == 100.0);
+        CHECK(positions[1] == 8.0);
+    }
+}
+
+TEST_CASE("a chord that leaves the curve gains the sample it missed", "[levels][pyramid]")
+{
+    // A quarter of a sine, folded as one bucket. The two extremes are the
+    // ends, and the straight line between them misses the flank by a fifth of
+    // the amplitude. One pixel smaller than that miss has to bring the flank
+    // back; the extremes themselves stay.
+    constexpr long long kCount = 4000;
+    std::vector<double> line(static_cast<std::size_t>(kCount));
+    for (long long i = 0; i < kCount; ++i) {
+        line[static_cast<std::size_t>(i)] = std::sin(2.0 * 3.14159265358979323846 * i / kCount);
+    }
+    const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), kCount, 1);
+    std::vector<double> values;
+    std::vector<double> positions;
+    REQUIRE(gui::fillWindow(pyramid, gui::PlotWindow{0, 1000, 1024, 1}, values, &positions));
+    REQUIRE(values.size() == 2);
+    const double missed = 0.2;
+    gui::followCurve(pyramid, values, positions, missed, 64);
+    REQUIRE(values.size() > 2);
+    REQUIRE(positions.size() == values.size());
+    CHECK(positions.front() == 0.0);
+    CHECK(values.back() == 1.0);
+    double worst = 0.0;
+    for (std::size_t i = 1; i < positions.size(); ++i) {
+        const double i0 = positions[i - 1];
+        const double i1 = positions[i];
+        const double y0 = values[i - 1];
+        const double y1 = values[i];
+        if (!(i1 > i0)) {
+            continue;
+        }
+        for (long long k = static_cast<long long>(i0) + 1; k < static_cast<long long>(i1); ++k) {
+            const double on = y0 + (static_cast<double>(k) - i0) / (i1 - i0) * (y1 - y0);
+            worst = std::max(worst, std::abs(line[static_cast<std::size_t>(k)] - on));
+        }
+    }
+    CHECK(worst <= missed);
+}
+
 namespace {
 
 /// Where `x` falls across a logarithmic pane from `low` to `high`, as a
@@ -830,9 +914,14 @@ TEST_CASE("a logarithmic pane is folded one envelope per column, from the first 
                 continue;
             }
             REQUIRE(at + 1 < fold.values.size());
-            CHECK(fold.positions[at] == static_cast<double>(first));
+            // The extreme, at the sample it occurred at. The column's start
+            // would put a late spike halfway across the column.
+            CHECK(fold.positions[at] == static_cast<double>(want.firstAt()));
+            CHECK(fold.positions[at + 1] == static_cast<double>(want.secondAt()));
             CHECK(fold.values[at] == want.first());
             CHECK(fold.values[at + 1] == want.second());
+            CHECK(fold.positions[at] >= static_cast<double>(first));
+            CHECK(fold.positions[at + 1] < static_cast<double>(last));
             at += 2;
         }
         CHECK(at == fold.values.size());

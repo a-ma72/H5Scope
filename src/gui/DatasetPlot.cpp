@@ -147,6 +147,7 @@ void DatasetPlot::invalidate()
     // the old line for another frame would be drawing the wrong file.
     releaseDrawing();
     lines_.clear();
+    positions_.clear();
     dropFold();
     // And the lines they were folded out of. A pyramid is a reading of one
     // dataset's elements; carrying it into another would be drawing the wrong
@@ -221,6 +222,7 @@ void DatasetPlot::applyCap(int cap)
     // resizes the window is a worse reading of the data than one drawn at the
     // bucket they had a moment ago.
     retire(lines_);
+    retire(positions_);
     // The pyramids stay. A different pane width is a different *fold* of the
     // same elements, and those elements are in hand -- so what used to be a
     // re-read of every drawn line on every sixty-four pixels of a window drag
@@ -420,13 +422,14 @@ void DatasetPlot::readMissing() const
             continue; // already folded at this width
         }
         std::vector<double> summary;
+        std::vector<double> positions;
         long long stride = 1;
         double step = 1.0;
         // Half as many buckets as points, because an envelope answers with two
         // values for each of them -- so a line still arrives as at most
         // kMaxPoints doubles and nothing about what this costs in memory
         // changes.
-        if (!fillWhole(pyramid->second, cap_ / 2, summary, stride, step)) {
+        if (!fillWhole(pyramid->second, cap_ / 2, summary, stride, step, &positions)) {
             continue;
         }
         // Every line covers the same extent of the other axis, so these are the
@@ -439,6 +442,9 @@ void DatasetPlot::readMissing() const
         // of extremes per bucket, whatever the step works out to.
         summarised_ = stride > 1;
         lines_.emplace(series, std::move(summary));
+        if (positions.size() == lines_.find(series)->second.size()) {
+            positions_.insert_or_assign(series, std::move(positions));
+        }
     }
 }
 
@@ -477,10 +483,12 @@ void DatasetPlot::ensure() const
         retire(gone);
     };
     prune(lines_);
+    prune(positions_);
     prune(fold_.values);
     prune(fold_.xs);
     for (Detail& level : levels_) {
         prune(level.lines);
+        prune(level.positions);
     }
     // The pyramids go the blunt way, because nothing borrows them: what the
     // renderer holds a pointer into is always a vector in `lines_` or in a
@@ -773,6 +781,11 @@ PlotLine DatasetPlot::lineOf(int series) const
             line.values = closer->second.data();
             line.count = static_cast<qsizetype>(closer->second.size());
             line.positionStep = level.step;
+            const auto atPos = level.positions.find(series);
+            if (atPos != level.positions.end() &&
+                static_cast<qsizetype>(atPos->second.size()) == line.count) {
+                line.positions = atPos->second.data();
+            }
             // A run at bucket one is the elements of that run, read again and
             // drawn one for one; anything coarser is an envelope of them.
             line.summarised = level.window.bucket > 1;
@@ -791,12 +804,15 @@ PlotLine DatasetPlot::lineOf(int series) const
     // to skip the same distance. With the default axis and no thinning this is
     // the element's own index, which is what the grid's column headers count.
     //
-    // Half a bucket when the line was read as an envelope: the two values of a
-    // bucket are its extremes, they occurred somewhere inside it, and putting
-    // them at its start and its middle is the nearest thing to where they were
-    // that costs nothing to say. A bucket is about a pixel wide, so the error
-    // is half of one.
+    // The step stays half a bucket, which is what turns the window back into
+    // indices. The extreme is drawn at the sample it occurred at, when the
+    // fold recorded one -- a straight line from the bucket's start to its
+    // middle would put half the rise in the next column.
     line.positionStep = step_;
+    const auto atPos = positions_.find(series);
+    if (atPos != positions_.end() && static_cast<qsizetype>(atPos->second.size()) == line.count) {
+        line.positions = atPos->second.data();
+    }
     line.summarised = summarised_;
     return line;
 }
@@ -1188,6 +1204,7 @@ void DatasetPlot::trimLevels()
         // rest is coldest.
         const std::size_t worst = gui::coldestLevel(ladder(), levelView(), focusFor());
         retire(levels_[worst].lines);
+        retire(levels_[worst].positions);
         levels_.erase(levels_.begin() + static_cast<long>(worst));
     }
 }
@@ -1224,15 +1241,21 @@ bool DatasetPlot::fillDetail(const PlotWindow& detail)
         if (level.lines.find(series) != level.lines.end()) {
             continue; // already held at this run
         }
-        if (!fillWindow(pyramids_[series], detail, folded)) {
+        std::vector<double> positions;
+        if (!fillWindow(pyramids_[series], detail, folded, &positions)) {
             continue;
         }
         // Every line covers the same run, so these are the same for all of them
         // and the last word is as good as the first. They are what a read of
-        // this run would have reported: a pair per bucket half a bucket apart,
-        // or the elements themselves when the bucket is one.
+        // this run would have reported: a pair per bucket, or the elements
+        // themselves when the bucket is one. The step stays half a bucket so
+        // the window still maps back to indices; the positions are where the
+        // extremes occurred.
         level.points = static_cast<int>(folded.size());
         level.step = detail.bucket == 1 ? 1.0 : static_cast<double>(detail.bucket) / 2.0;
+        if (positions.size() == folded.size()) {
+            level.positions[series] = std::move(positions);
+        }
         level.lines[series] = std::move(folded);
         folded.clear();
         any = true;
@@ -1346,7 +1369,15 @@ void DatasetPlot::takeDetail(const PlotWindow& detail, const std::vector<int>& s
         if (held != level.lines.end()) {
             retire(held->second);
         }
+        auto heldAt = level.positions.find(series[i]);
+        if (heldAt != level.positions.end()) {
+            retire(heldAt->second);
+            level.positions.erase(heldAt);
+        }
         level.lines[series[i]] = std::move(grid.values);
+        if (grid.positions.size() == level.lines[series[i]].size() && !grid.positions.empty()) {
+            level.positions[series[i]] = std::move(grid.positions);
+        }
     }
 
     trimLevels();
@@ -1370,6 +1401,7 @@ void DatasetPlot::clearDetail()
     wanted_.reset();
     for (Detail& level : levels_) {
         retire(level.lines);
+        retire(level.positions);
     }
     levels_.clear();
 }
