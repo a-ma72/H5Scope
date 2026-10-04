@@ -15,6 +15,11 @@ extern "C" {
 #else
 #define H5PLOT_API __declspec(dllimport)
 #endif
+#elif defined(__GNUC__)
+/* Default visibility exports everything. A toolchain that hides symbols
+ * (and a wheel build is free to) would then ship a library whose C API
+ * ctypes cannot find. The attribute is the dllexport of ELF and Mach-O. */
+#define H5PLOT_API __attribute__((visibility("default")))
 #else
 #define H5PLOT_API
 #endif

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import ctypes
+import sys
 from ctypes import POINTER, c_double, c_int, c_longlong, c_void_p
 from pathlib import Path
 
@@ -65,14 +66,27 @@ _CYCLE = (
 )
 
 
+def _library_names() -> tuple[str, ...]:
+    # One name per platform, the one CMake's prefix and suffix produce:
+    # h5plot.dll, libh5plot.so, libh5plot.dylib. A second spelling would
+    # load whichever file happened to be left over from another build.
+    if sys.platform == "win32":
+        return ("h5plot.dll",)
+    if sys.platform == "darwin":
+        return ("libh5plot.dylib",)
+    return ("libh5plot.so",)
+
+
 def _load() -> ctypes.CDLL:
     here = Path(__file__).resolve().parent
-    for name in ("h5plot.dll", "libh5plot.dll", "libh5plot.so"):
+    names = _library_names()
+    for name in names:
         path = here / name
         if path.exists():
             return ctypes.CDLL(str(path))
     raise FileNotFoundError(
-        f"h5plot.dll not next to {here}. Run python/h5plot/build.bat with TDM GCC."
+        f"{names[0]} not next to {here}. Build it with python/h5plot/build.bat, "
+        "or install the wheel."
     )
 
 

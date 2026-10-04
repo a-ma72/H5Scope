@@ -2,29 +2,27 @@
 rem SPDX-FileCopyrightText: 2026 Andreas Martin
 rem SPDX-License-Identifier: GPL-3.0-only
 rem
-rem Build h5plot.dll with TDM GCC. CMake is optional; this calls g++ directly.
+rem Build h5plot.dll with TDM GCC. The sources live in CMakeLists.txt, which
+rem is also what the wheel compiles.
 setlocal
-set ROOT=%~dp0..\..
-set SRC=%ROOT%\src
-set OUT=%~dp0h5plot.dll
+set HERE=%~dp0
+set ROOT=%HERE%..\..
 set CXX=g++
 where g++ >nul 2>nul
 if errorlevel 1 (
-  if exist C:\TDM-GCC-64\bin\g++.exe set CXX=C:\TDM-GCC-64\bin\g++.exe
+  if exist C:\TDM-GCC-64\bin\g++.exe set "CXX=C:\TDM-GCC-64\bin\g++.exe"
 )
-echo Using %CXX%
-"%CXX%" --version
-
-"%CXX%" -shared -O2 -std=c++20 -DH5PLOT_EXPORT ^
-  -I "%SRC%\plotcore\stubs" -I "%SRC%" ^
-  "%SRC%\gui\PlotProjection.cpp" ^
-  "%SRC%\gui\PlotLevels.cpp" ^
-  "%SRC%\gui\PlotPyramid.cpp" ^
-  "%SRC%\plotcore\LineStore.cpp" ^
-  "%SRC%\plotcore\View.cpp" ^
-  "%SRC%\plotcore\plotcore_c.cpp" ^
-  -static-libgcc -static-libstdc++ ^
-  -o "%OUT%"
+for %%I in ("%CXX%") do set "PATH=%%~dpI;%PATH%"
+where cmake >nul 2>nul
+if errorlevel 1 (
+  echo cmake was not found. Install CMake, or install a wheel instead of building the DLL here.
+  exit /b 1
+)
+cmake -S "%HERE%." -B "%HERE%build" -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DH5SCOPE_SRC="%ROOT%\src"
 if errorlevel 1 exit /b 1
-echo Built %OUT%
-dir "%OUT%"
+cmake --build "%HERE%build"
+if errorlevel 1 exit /b 1
+copy /Y "%HERE%build\h5plot.dll" "%HERE%h5plot.dll"
+if errorlevel 1 exit /b 1
+echo Built %HERE%h5plot.dll
+dir "%HERE%h5plot.dll"

@@ -1,4 +1,7 @@
 h5plot.dll
 libh5plot.dll
 libh5plot.dll.a
+h5plot.dll.a
+libh5plot.so
+libh5plot.dylib
 build/
