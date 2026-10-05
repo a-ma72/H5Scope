@@ -121,26 +121,35 @@ std::optional<PlotWindow> windowFor(double low, double high, long long length, l
         return {};
     }
 
-    // A bucket small enough to put `buckets` of them across twice the visible
-    // span. A power of two, and ceiling rather than nearest, so that zooming
-    // steps from one octave to the next -- an arbitrary bucket would shimmer,
+    // A bucket small enough to put one of them on each pixel of the pane. A
+    // power of two, and ceiling rather than nearest, so that zooming steps
+    // from one octave to the next -- an arbitrary bucket would shimmer,
     // because every pixel of zoom would change which samples each of them
     // holds. Bounded rather than open, because a span that has gone to infinity
     // under a degenerate view would otherwise not stop.
-    const double wanted = 2.0 * (high - low) / static_cast<double>(buckets);
+    //
+    // The run is still twice the pane. That factor used to live in the bucket,
+    // which made one bucket two to four pixels wide: the two extremes then sat
+    // apart and the stroke between them was the diagonal of an empty column.
+    // It lives on the run now, so a bucket is one to two pixels and a pan off
+    // the middle is still data already in hand.
+    const double wanted = (high - low) / static_cast<double>(buckets);
     long long bucket = 1;
     while (static_cast<double>(bucket) < wanted && bucket < (std::int64_t{1} << 40)) {
         bucket <<= 1;
     }
 
-    const long long span = bucket * buckets;
+    const long long span = bucket * buckets * 2;
     if (span >= length) {
         // The whole-line summary already covers this much at this bucket or
         // finer. There is nothing a second read could add.
         return {};
     }
 
-    const long long stride = std::max<long long>(bucket, (buckets / 4) * bucket);
+    // A quarter of the run, which is twice the pane: (buckets / 2) buckets of
+    // the caller's count. Stepping by that leaves the run in hand covering the
+    // pane for one step past the boundary that asked for the next one.
+    const long long stride = std::max<long long>(bucket, (buckets / 2) * bucket);
     // Clamped in double before the cast: a view a long way off the data gives a
     // bound that does not fit in a long long at all.
     const double aligned =

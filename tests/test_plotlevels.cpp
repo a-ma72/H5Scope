@@ -764,6 +764,41 @@ TEST_CASE("an extreme is found at the sample it occurred at", "[levels][pyramid]
     }
 }
 
+TEST_CASE("a bucket keeps the samples where it is entered and left", "[levels][pyramid]")
+{
+    // The two extremes are the envelope. The samples on the seams are what
+    // joins one column to the next, and a flank whose extreme already sits
+    // on the seam does not grow a second copy of it.
+    constexpr long long kCount = 16;
+    std::vector<double> line{1.0, 5.0, 0.0, 9.0, 2.0, 2.0, 3.0, 4.0,
+                             0.0, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0};
+    const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), kCount, 1);
+    std::vector<double> values;
+    std::vector<double> positions;
+    REQUIRE(gui::fillWindow(pyramid, gui::PlotWindow{0, kCount, 8, 2}, values, &positions));
+    REQUIRE(positions.size() == values.size());
+
+    // First bucket: entered at 1, down to 0, up to 9. The sample it is left
+    // on sits one index before the next bucket's entry, so that seam is the
+    // entry and not a second point.
+    REQUIRE(values.size() == 6);
+    CHECK(positions[0] == 0.0);
+    CHECK(values[0] == 1.0);
+    CHECK(positions[1] == 2.0);
+    CHECK(values[1] == 0.0);
+    CHECK(positions[2] == 3.0);
+    CHECK(values[2] == 9.0);
+
+    // Second bucket: entered at 0, up to 3, left at 0. Nothing follows, so
+    // the exit stays. The peak is not a seam.
+    CHECK(positions[3] == 8.0);
+    CHECK(values[3] == 0.0);
+    CHECK(positions[4] == 11.0);
+    CHECK(values[4] == 3.0);
+    CHECK(positions[5] == 15.0);
+    CHECK(values[5] == 0.0);
+}
+
 TEST_CASE("a chord that leaves the curve gains the sample it missed", "[levels][pyramid]")
 {
     // A quarter of a sine, folded as one bucket. The two extremes are the
@@ -842,11 +877,11 @@ TEST_CASE("a logarithmic pane is folded one envelope per column, from the first 
 
     REQUIRE(fold.values.size() == fold.positions.size());
     CHECK(fold.summarised);
-    // Bounded by the pane, not by the line: two points a column at most, and
-    // the columns are between one and two a pixel with half a pane of margin
-    // either side.
-    CHECK(fold.values.size() <= 2 * edges.size());
-    CHECK(fold.values.size() <= 8 * static_cast<std::size_t>(kColumns) + 2);
+    // Bounded by the pane, not by the line: four points a column at most --
+    // the two extremes and the sample on each seam -- and the columns are
+    // between one and two a pixel with half a pane of margin either side.
+    CHECK(fold.values.size() <= 4 * edges.size());
+    CHECK(fold.values.size() <= 16 * static_cast<std::size_t>(kColumns) + 2);
     REQUIRE(std::is_sorted(fold.positions.begin(), fold.positions.end()));
 
     SECTION("the line starts at the first element there is a place for")
@@ -913,16 +948,56 @@ TEST_CASE("a logarithmic pane is folded one envelope per column, from the first 
                 }
                 continue;
             }
-            REQUIRE(at + 1 < fold.values.size());
-            // The extreme, at the sample it occurred at. The column's start
-            // would put a late spike halfway across the column.
-            CHECK(fold.positions[at] == static_cast<double>(want.firstAt()));
-            CHECK(fold.positions[at + 1] == static_cast<double>(want.secondAt()));
-            CHECK(fold.values[at] == want.first());
-            CHECK(fold.values[at + 1] == want.second());
-            CHECK(fold.positions[at] >= static_cast<double>(first));
-            CHECK(fold.positions[at + 1] < static_cast<double>(last));
-            at += 2;
+            REQUIRE(at < fold.values.size());
+            // The extremes, and the sample on each seam, in position order.
+            // A seam that is already an extreme is that one point.
+            struct Station
+            {
+                double at = 0.0;
+                double value = 0.0;
+            };
+            std::vector<Station> expect;
+            const auto consider = [&](long long index) {
+                if (index < first || index >= last) {
+                    return;
+                }
+                const double atIndex = static_cast<double>(index);
+                for (const Station& kept : expect) {
+                    if (kept.at == atIndex) {
+                        return;
+                    }
+                }
+                expect.push_back({atIndex, line[static_cast<std::size_t>(index)]});
+            };
+            consider(first);
+            consider(want.firstAt());
+            consider(want.secondAt());
+            // The exit is the sample before the next column's entry. That
+            // column writes the entry, so the exit is not a second seam.
+            bool followed = false;
+            for (std::size_t n = c + 1; n + 1 < edges.size(); ++n) {
+                const auto nFirst =
+                    static_cast<long long>(std::ceil(std::max(edges[n], 0.0)));
+                const auto nLast = static_cast<long long>(
+                    std::min(std::ceil(edges[n + 1]), static_cast<double>(kLength)));
+                if (nLast <= nFirst) {
+                    continue;
+                }
+                followed = nFirst == last && last < kLength &&
+                           std::isfinite(line[static_cast<std::size_t>(last)]);
+                break;
+            }
+            if (!followed) {
+                consider(last - 1);
+            }
+            std::sort(expect.begin(), expect.end(),
+                      [](const Station& a, const Station& b) { return a.at < b.at; });
+            REQUIRE(at + expect.size() <= fold.values.size());
+            for (const Station& station : expect) {
+                CHECK(fold.positions[at] == station.at);
+                CHECK(fold.values[at] == station.value);
+                ++at;
+            }
         }
         CHECK(at == fold.values.size());
     }
