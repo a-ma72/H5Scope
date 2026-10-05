@@ -425,78 +425,116 @@ namespace {
     return fallback;
 }
 
-/// Fold `[first, first + span)` of the line at `bucket`, out of the pyramid.
+/// The value of the straight line where it crosses `edge`.
 ///
-/// One bucket as a column: the sample it is entered on, the two extremes, and
-/// — when `keepExit` — the sample it is left on, in the order of their positions.
-///
-/// The sample a bucket is left on and the sample the next one is entered on
-/// are neighbours, one index apart. The next column writes that entry, so the
-/// exit is a second copy of the same seam. It stays only for the last column,
-/// and where the next entry is not a number: the stroke has to end on the last
-/// finite sample, or the gap would open a step early. An extreme that sits on
-/// the exit is written with the extremes, whichever way the seam goes.
-///
-/// A seam that is not finite is left out. That is a gap, which is what a NaN
-/// already is. A station that is the same sample as one already kept is left
-/// out too, so a flank whose extreme sits on the seam stays the two points it
-/// always was.
-void appendColumn(std::vector<double>& values, std::vector<double>& positions, const double* raw,
-                  long long rawCount, long long start, long long end, double earlier,
-                  double earlierAt, double later, double laterAt, bool keepExit)
+/// The edge sits between two samples, so the value is not one of them: it is
+/// the height the stroke has there. False when nothing finite crosses — the
+/// neighbour is missing, or it is a NaN, and a NaN is a gap.
+[[nodiscard]] bool crossingAt(const double* raw, long long rawCount, double edge, double& y)
 {
-    if (!std::isfinite(earlier) && !std::isfinite(later)) {
-        const auto nothing = std::numeric_limits<double>::quiet_NaN();
-        const double at = static_cast<double>(std::max(start, 0LL));
-        values.push_back(nothing);
-        positions.push_back(at);
-        values.push_back(nothing);
-        positions.push_back(at);
+    if (raw == nullptr || !(edge >= 0.0) || edge > static_cast<double>(rawCount - 1)) {
+        return false;
+    }
+    const auto left = static_cast<long long>(std::floor(edge));
+    if (left < 0 || left >= rawCount) {
+        return false;
+    }
+    const double a = raw[static_cast<std::size_t>(left)];
+    if (static_cast<double>(left) == edge || left + 1 >= rawCount) {
+        if (!std::isfinite(a)) {
+            return false;
+        }
+        y = a;
+        return true;
+    }
+    const double b = raw[static_cast<std::size_t>(left + 1)];
+    if (!std::isfinite(a) || !std::isfinite(b)) {
+        return false;
+    }
+    const double t = edge - static_cast<double>(left);
+    y = a + t * (b - a);
+    return true;
+}
+
+/// One column: the two extremes, the crossing at each edge included.
+///
+/// A seam joins the comparison. When the crossing lies outside the samples the
+/// column holds, it is the extreme, which is what keeps a peak that belongs to
+/// the next column from cutting this one short. When it lies between them it
+/// changes nothing and is not stored.
+///
+/// A flank runs from one edge to the other, and the stroke is that diagonal,
+/// at the positions where the extremes sit. Standing both on the column would
+/// lay this diagonal over the next column's, and a straight line would grow a
+/// lump at every seam. A turn inside the column has no such diagonal: both
+/// stand on the column, and the stroke there is vertical.
+void placeColumn(double& y0, double& y1, double& x0, double& x1, double columnAt,
+                 const double* raw, long long rawCount, double leftEdge, double rightEdge)
+{
+    if (!std::isfinite(y0) && !std::isfinite(y1)) {
+        x0 = x1 = columnAt;
         return;
     }
-    struct Station
-    {
-        double at = 0.0;
-        double value = 0.0;
-    };
-    Station stations[4];
-    int count = 0;
-    const auto add = [&](double at, double value) {
+    double low = 0.0;
+    double high = 0.0;
+    double lowAt = 0.0;
+    double highAt = 0.0;
+    bool have = false;
+    const auto offer = [&](double at, double value) {
         if (!std::isfinite(at) || !std::isfinite(value)) {
             return;
         }
-        for (int i = 0; i < count; ++i) {
-            if (stations[i].at == at) {
-                return;
-            }
+        if (!have) {
+            low = high = value;
+            lowAt = highAt = at;
+            have = true;
+            return;
         }
-        stations[count++] = {at, value};
+        if (value < low) {
+            low = value;
+            lowAt = at;
+        }
+        else if (value > high) {
+            high = value;
+            highAt = at;
+        }
     };
-    if (raw != nullptr && start >= 0 && start < rawCount && std::isfinite(raw[start])) {
-        add(static_cast<double>(start), raw[start]);
+    offer(x0, y0);
+    offer(x1, y1);
+    double crossed = 0.0;
+    if (crossingAt(raw, rawCount, leftEdge, crossed)) {
+        offer(leftEdge, crossed);
     }
-    add(earlierAt, earlier);
-    add(laterAt, later);
-    if (keepExit && raw != nullptr && end != start && end >= 0 && end < rawCount &&
-        std::isfinite(raw[end])) {
-        add(static_cast<double>(end), raw[end]);
+    if (crossingAt(raw, rawCount, rightEdge, crossed)) {
+        offer(rightEdge, crossed);
     }
-    std::sort(stations, stations + count,
-              [](const Station& a, const Station& b) { return a.at < b.at; });
-    for (int i = 0; i < count; ++i) {
-        values.push_back(stations[i].value);
-        positions.push_back(stations[i].at);
+    if (!have) {
+        x0 = x1 = columnAt;
+        return;
+    }
+    const double earlier = std::min(lowAt, highAt);
+    const double later = std::max(lowAt, highAt);
+    const bool flank = earlier <= leftEdge + 1.0 && later >= rightEdge - 1.0;
+    if (lowAt <= highAt) {
+        y0 = low;
+        y1 = high;
+        x0 = flank ? lowAt : columnAt;
+        x1 = flank ? highAt : columnAt;
+    }
+    else {
+        y0 = high;
+        y1 = low;
+        x0 = flank ? highAt : columnAt;
+        x1 = flank ? lowAt : columnAt;
     }
 }
 
-/// The seams beside the extremes, when the base still holds every sample.
-///
-/// Two indexed reads a bucket, not a second walk: the fold has already found
-/// the extremes, and the seam is the sample that walk started and ended on.
-/// A coarser base has thrown that sample away. Coarsening an envelope cannot
-/// grow it back, so those lines stay the pair.
-void withSeams(const LinePyramid& pyramid, long long bucket, long long first, long long count,
-               std::vector<double>& values, std::vector<double>& positions)
+/// Put each summarised bucket on its column, when the base still holds every
+/// sample. A coarser base has thrown the seam away. Coarsening an envelope
+/// cannot grow it back, so those lines stay the pair, at the positions the
+/// fold already named.
+void placeOnColumns(const LinePyramid& pyramid, long long bucket, long long first, long long count,
+                    std::vector<double>& values, std::vector<double>& positions)
 {
     if (pyramid.baseBucket() != 1 || bucket <= 1 || values.size() < 2 ||
         values.size() != positions.size() || values.size() % 2 != 0) {
@@ -506,27 +544,20 @@ void withSeams(const LinePyramid& pyramid, long long bucket, long long first, lo
     const long long rawCount = pyramid.length;
     const long long limit = std::min(first + count, rawCount);
     const long long buckets = static_cast<long long>(values.size() / 2);
-    std::vector<double> seamed;
-    std::vector<double> placed;
-    seamed.reserve(values.size() * 2);
-    placed.reserve(values.size() * 2);
     for (long long i = 0; i < buckets; ++i) {
         const long long start = first + i * bucket;
         if (start >= limit) {
             break;
         }
+        // The edge is halfway to the neighbouring sample. That is where the
+        // column ends and the next one begins, and the line crosses it between
+        // the two samples rather than on either of them.
         const long long end = std::min(start + bucket, limit) - 1;
-        const long long next = end + 1;
-        // The following bucket opens on the next sample. Its entry is this
-        // exit's neighbour, so one of the two is the seam.
-        const bool followed = i + 1 < buckets && next < limit && next < rawCount &&
-                              std::isfinite(raw[next]);
         const auto at = static_cast<std::size_t>(i) * 2;
-        appendColumn(seamed, placed, raw, rawCount, start, end, values[at], positions[at],
-                     values[at + 1], positions[at + 1], !followed);
+        placeColumn(values[at], values[at + 1], positions[at], positions[at + 1],
+                    0.5 * static_cast<double>(start + end), raw, rawCount,
+                    static_cast<double>(start) - 0.5, static_cast<double>(end) + 0.5);
     }
-    values.swap(seamed);
-    positions.swap(placed);
 }
 
 /// `positions`, when set, is filled alongside an envelope and cleared when the
@@ -613,7 +644,7 @@ void withSeams(const LinePyramid& pyramid, long long bucket, long long first, lo
                 atPos[outAt + 1] = static_cast<double>(first + at + found.secondAt());
             }
         });
-        withSeams(pyramid, bucket, first, take, out, *positions);
+        placeOnColumns(pyramid, bucket, first, take, out, *positions);
         return true;
     }
 
@@ -662,7 +693,7 @@ void withSeams(const LinePyramid& pyramid, long long bucket, long long first, lo
         (*positions)[static_cast<std::size_t>(i) * 2 + 1] =
             static_cast<double>(positionOf(pyramid, at, src, n, later, laterFallback));
     }
-    withSeams(pyramid, bucket, first, take, out, *positions);
+    placeOnColumns(pyramid, bucket, first, take, out, *positions);
     return true;
 }
 
@@ -972,38 +1003,20 @@ void foldColumns(const LinePyramid& pyramid, std::span<const double> edges, Colu
             out.positions.push_back(static_cast<double>(first));
             continue;
         }
-        // The same column the linear fold draws: the seams as well as the
-        // extremes, and only while the base still has the samples to name
-        // them. Above that the pair is all the level kept.
+        // The same column the linear fold draws. The crossing at each edge
+        // joins the extremes, and both stand on the column. Above a base of
+        // one the pair is all the level kept, at the positions it was found.
         if (base == 1) {
-            // The next column that is actually drawn. It opens on `last` when
-            // the edges abut, and that sample is the neighbour of this exit.
-            bool followed = false;
-            if (last < length &&
-                std::isfinite(bottom.values[static_cast<std::size_t>(last)])) {
-                long long probe = last;
-                for (std::size_t n = c + 1; n + 1 < edges.size(); ++n) {
-                    const double nFrom = edges[n];
-                    const double nTo = edges[n + 1];
-                    if (!(nTo > nFrom) || !(nTo > 0.0) ||
-                        !(nFrom < static_cast<double>(length))) {
-                        continue;
-                    }
-                    long long nFirst =
-                        static_cast<long long>(std::ceil(std::max(nFrom, 0.0)));
-                    const long long nLast = static_cast<long long>(
-                        std::min(std::ceil(nTo), static_cast<double>(length)));
-                    nFirst = std::max(nFirst, probe);
-                    if (nLast <= nFirst) {
-                        continue;
-                    }
-                    followed = nFirst == last;
-                    break;
-                }
-            }
-            appendColumn(out.values, out.positions, bottom.values.data(), length, first,
-                         last - 1, found.first(), static_cast<double>(found.firstAt()),
-                         found.second(), static_cast<double>(found.secondAt()), !followed);
+            double y0 = found.first();
+            double y1 = found.second();
+            double x0 = static_cast<double>(found.firstAt());
+            double x1 = static_cast<double>(found.secondAt());
+            placeColumn(y0, y1, x0, x1, 0.5 * (from + to), bottom.values.data(), length, from,
+                        to);
+            out.values.push_back(y0);
+            out.values.push_back(y1);
+            out.positions.push_back(x0);
+            out.positions.push_back(x1);
         }
         else {
             out.values.push_back(found.first());

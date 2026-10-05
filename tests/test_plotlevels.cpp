@@ -764,47 +764,39 @@ TEST_CASE("an extreme is found at the sample it occurred at", "[levels][pyramid]
     }
 }
 
-TEST_CASE("a bucket keeps the samples where it is entered and left", "[levels][pyramid]")
+TEST_CASE("a column is the two extremes, the crossing at each edge included",
+          "[levels][pyramid]")
 {
-    // The two extremes are the envelope. The samples on the seams are what
-    // joins one column to the next, and a flank whose extreme already sits
-    // on the seam does not grow a second copy of it.
+    // The peak of the second bucket is 20. The line crosses into it halfway
+    // between 4 and 20, at 12, and that crossing is above everything the first
+    // bucket holds, so it becomes the first column's maximum. It is below the
+    // peak, so the second column keeps 20. Both ends of a column stand on it.
     constexpr long long kCount = 16;
     std::vector<double> line{1.0, 5.0, 0.0, 9.0, 2.0, 2.0, 3.0, 4.0,
-                             0.0, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0};
+                             20.0, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0};
     const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), kCount, 1);
     std::vector<double> values;
     std::vector<double> positions;
     REQUIRE(gui::fillWindow(pyramid, gui::PlotWindow{0, kCount, 8, 2}, values, &positions));
+    REQUIRE(values.size() == 4);
     REQUIRE(positions.size() == values.size());
 
-    // First bucket: entered at 1, down to 0, up to 9. The sample it is left
-    // on sits one index before the next bucket's entry, so that seam is the
-    // entry and not a second point.
-    REQUIRE(values.size() == 6);
-    CHECK(positions[0] == 0.0);
-    CHECK(values[0] == 1.0);
-    CHECK(positions[1] == 2.0);
-    CHECK(values[1] == 0.0);
-    CHECK(positions[2] == 3.0);
-    CHECK(values[2] == 9.0);
+    CHECK(values[0] == 0.0);
+    CHECK(values[1] == 12.0);
+    CHECK(positions[0] == 3.5);
+    CHECK(positions[1] == 3.5);
 
-    // Second bucket: entered at 0, up to 3, left at 0. Nothing follows, so
-    // the exit stays. The peak is not a seam.
-    CHECK(positions[3] == 8.0);
+    CHECK(values[2] == 20.0);
     CHECK(values[3] == 0.0);
-    CHECK(positions[4] == 11.0);
-    CHECK(values[4] == 3.0);
-    CHECK(positions[5] == 15.0);
-    CHECK(values[5] == 0.0);
+    CHECK(positions[2] == 11.5);
+    CHECK(positions[3] == 11.5);
 }
 
 TEST_CASE("a chord that leaves the curve gains the sample it missed", "[levels][pyramid]")
 {
-    // A quarter of a sine, folded as one bucket. The two extremes are the
-    // ends, and the straight line between them misses the flank by a fifth of
-    // the amplitude. One pixel smaller than that miss has to bring the flank
-    // back; the extremes themselves stay.
+    // A quarter of a sine, one rising flank. The extremes sit at the two ends,
+    // so the stroke is the chord between them, and a miss of a fifth of the
+    // amplitude brings the flank back. The ends themselves stay.
     constexpr long long kCount = 4000;
     std::vector<double> line(static_cast<std::size_t>(kCount));
     for (long long i = 0; i < kCount; ++i) {
@@ -815,12 +807,13 @@ TEST_CASE("a chord that leaves the curve gains the sample it missed", "[levels][
     std::vector<double> positions;
     REQUIRE(gui::fillWindow(pyramid, gui::PlotWindow{0, 1000, 1024, 1}, values, &positions));
     REQUIRE(values.size() == 2);
+    REQUIRE(positions[1] > positions[0]);
     const double missed = 0.2;
     gui::followCurve(pyramid, values, positions, missed, 64);
     REQUIRE(values.size() > 2);
     REQUIRE(positions.size() == values.size());
     CHECK(positions.front() == 0.0);
-    CHECK(values.back() == 1.0);
+    CHECK(values.back() == Approx(1.0));
     double worst = 0.0;
     for (std::size_t i = 1; i < positions.size(); ++i) {
         const double i0 = positions[i - 1];
@@ -877,10 +870,9 @@ TEST_CASE("a logarithmic pane is folded one envelope per column, from the first 
 
     REQUIRE(fold.values.size() == fold.positions.size());
     CHECK(fold.summarised);
-    // Bounded by the pane, not by the line: four points a column at most --
-    // the two extremes and the sample on each seam -- and the columns are
-    // between one and two a pixel with half a pane of margin either side.
-    CHECK(fold.values.size() <= 4 * edges.size());
+    // Two values a column: the extremes, the crossing at each edge included,
+    // both at the column. Narrower than that, the samples themselves.
+    CHECK(fold.values.size() <= 2 * edges.size());
     CHECK(fold.values.size() <= 16 * static_cast<std::size_t>(kColumns) + 2);
     REQUIRE(std::is_sorted(fold.positions.begin(), fold.positions.end()));
 
@@ -949,55 +941,72 @@ TEST_CASE("a logarithmic pane is folded one envelope per column, from the first 
                 continue;
             }
             REQUIRE(at < fold.values.size());
-            // The extremes, and the sample on each seam, in position order.
-            // A seam that is already an extreme is that one point.
-            struct Station
-            {
-                double at = 0.0;
-                double value = 0.0;
-            };
-            std::vector<Station> expect;
-            const auto consider = [&](long long index) {
-                if (index < first || index >= last) {
+            // The two extremes after each edge's crossing has joined them.
+            // A flank keeps the positions; a turn stands both on the column.
+            double low = 0.0;
+            double high = 0.0;
+            double lowAt = 0.0;
+            double highAt = 0.0;
+            bool have = false;
+            const auto offer = [&](double where, double value) {
+                if (!std::isfinite(where) || !std::isfinite(value)) {
                     return;
                 }
-                const double atIndex = static_cast<double>(index);
-                for (const Station& kept : expect) {
-                    if (kept.at == atIndex) {
-                        return;
-                    }
+                if (!have) {
+                    low = high = value;
+                    lowAt = highAt = where;
+                    have = true;
+                    return;
                 }
-                expect.push_back({atIndex, line[static_cast<std::size_t>(index)]});
+                if (value < low) {
+                    low = value;
+                    lowAt = where;
+                }
+                else if (value > high) {
+                    high = value;
+                    highAt = where;
+                }
             };
-            consider(first);
-            consider(want.firstAt());
-            consider(want.secondAt());
-            // The exit is the sample before the next column's entry. That
-            // column writes the entry, so the exit is not a second seam.
-            bool followed = false;
-            for (std::size_t n = c + 1; n + 1 < edges.size(); ++n) {
-                const auto nFirst =
-                    static_cast<long long>(std::ceil(std::max(edges[n], 0.0)));
-                const auto nLast = static_cast<long long>(
-                    std::min(std::ceil(edges[n + 1]), static_cast<double>(kLength)));
-                if (nLast <= nFirst) {
-                    continue;
+            const auto crossing = [&](double edge) {
+                const auto left = static_cast<long long>(std::floor(edge));
+                if (left < 0 || left >= kLength) {
+                    return;
                 }
-                followed = nFirst == last && last < kLength &&
-                           std::isfinite(line[static_cast<std::size_t>(last)]);
-                break;
+                const double a = line[static_cast<std::size_t>(left)];
+                if (static_cast<double>(left) == edge || left + 1 >= kLength) {
+                    offer(edge, a);
+                    return;
+                }
+                const double b = line[static_cast<std::size_t>(left + 1)];
+                if (!std::isfinite(a) || !std::isfinite(b)) {
+                    return;
+                }
+                const double t = edge - static_cast<double>(left);
+                offer(edge, a + t * (b - a));
+            };
+            offer(static_cast<double>(want.firstAt()), want.first());
+            offer(static_cast<double>(want.secondAt()), want.second());
+            crossing(edges[c]);
+            crossing(edges[c + 1]);
+            REQUIRE(have);
+            const double earlier = std::min(lowAt, highAt);
+            const double later = std::max(lowAt, highAt);
+            const bool flank = earlier <= edges[c] + 1.0 && later >= edges[c + 1] - 1.0;
+            const double columnAt = 0.5 * (edges[c] + edges[c + 1]);
+            REQUIRE(at + 2 <= fold.values.size());
+            if (lowAt <= highAt) {
+                CHECK(fold.values[at] == low);
+                CHECK(fold.values[at + 1] == high);
+                CHECK(fold.positions[at] == (flank ? lowAt : columnAt));
+                CHECK(fold.positions[at + 1] == (flank ? highAt : columnAt));
             }
-            if (!followed) {
-                consider(last - 1);
+            else {
+                CHECK(fold.values[at] == high);
+                CHECK(fold.values[at + 1] == low);
+                CHECK(fold.positions[at] == (flank ? highAt : columnAt));
+                CHECK(fold.positions[at + 1] == (flank ? lowAt : columnAt));
             }
-            std::sort(expect.begin(), expect.end(),
-                      [](const Station& a, const Station& b) { return a.at < b.at; });
-            REQUIRE(at + expect.size() <= fold.values.size());
-            for (const Station& station : expect) {
-                CHECK(fold.positions[at] == station.at);
-                CHECK(fold.values[at] == station.value);
-                ++at;
-            }
+            at += 2;
         }
         CHECK(at == fold.values.size());
     }

@@ -206,13 +206,15 @@ private:
 /// `positions`, when it is set, receives where each value occurred: one
 /// element index per value in `out`, in the same order, and cleared when the
 /// bucket is one because those values *are* the elements and the index is the
-/// step. With a base of one that is the extremes and one sample on each seam,
-/// in position order: the entry of a bucket, and its exit only when the next
-/// bucket does not open on the following sample. A station is kept once when
-/// it is the same sample. A coarser base has no seam left to name, and the
-/// pair is what comes back. The positions are looked up from the levels
-/// already held, and the pyramid does not grow to remember them. Null leaves
-/// the fold as it was, a pair half a bucket apart with no index beside it.
+/// step. With a base of one a summarised bucket is the two extremes after the
+/// crossing at each edge has joined them. A flank keeps the positions the
+/// extremes occurred at, so a straight line stays that line. A turn inside the
+/// bucket writes both at the column, and the stroke there is vertical. A
+/// crossing that lies between the extremes is not a third point. A coarser
+/// base has no seam left to name, and the pair comes back at the positions the
+/// fold found. The positions are looked up from the levels already held, and
+/// the pyramid does not grow to remember them. Null leaves the fold as it was,
+/// a pair half a bucket apart with no index beside it.
 [[nodiscard]] bool fillWindow(const LinePyramid& pyramid, const PlotWindow& window,
                               std::vector<double>& out,
                               std::vector<double>* positions = nullptr);
@@ -317,8 +319,8 @@ struct ColumnFold
 /// column narrower than one element holds nothing and adds nothing. A column
 /// with nothing finite in it is one NaN, which is a gap.
 ///
-/// `out` is cleared first. Its size is at most four times the number of
-/// columns: the two extremes and the sample on each seam.
+/// `out` is cleared first. A column that still has its samples is two values,
+/// both at the column: the extremes, the crossing at each edge included.
 void foldColumns(const LinePyramid& pyramid, std::span<const double> edges, ColumnFold& out);
 
 } // namespace gui
