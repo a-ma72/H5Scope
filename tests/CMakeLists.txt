@@ -76,6 +76,16 @@ add_executable(test_plotlevels test_plotlevels.cpp)
 target_link_libraries(test_plotlevels PRIVATE gui test_main Catch2::Catch2)
 catch_discover_tests(test_plotlevels)
 
+# --- the QWidget host and the RAM store -----------------------------------
+# plotcore without the HDF5 viewer: a borrowed buffer, a pyramid, a QWidget.
+# Links plotcore rather than gui, so a regression here does not pull the
+# QML stack. QApplication is created in the suite; the offscreen plugin is
+# what lets that happen on a machine with no display.
+qt_add_executable(test_plotcore test_plotcore.cpp)
+target_link_libraries(test_plotcore PRIVATE plotcore Catch2::Catch2WithMain)
+qt_import_plugins(test_plotcore INCLUDE Qt6::QOffscreenIntegrationPlugin)
+catch_discover_tests(test_plotcore PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # --- the custom plot tabs -------------------------------------------------
 # Its own suite rather than more of test_models: what it covers is one feature
 # whose whole subject is reading several datasets at once, which is the thing

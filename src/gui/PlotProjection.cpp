@@ -121,26 +121,35 @@ std::optional<PlotWindow> windowFor(double low, double high, long long length, l
         return {};
     }
 
-    // A bucket small enough to put `buckets` of them across twice the visible
-    // span. A power of two, and ceiling rather than nearest, so that zooming
-    // steps from one octave to the next -- an arbitrary bucket would shimmer,
+    // A bucket small enough to put one of them on each pixel of the pane. A
+    // power of two, and ceiling rather than nearest, so that zooming steps
+    // from one octave to the next -- an arbitrary bucket would shimmer,
     // because every pixel of zoom would change which samples each of them
     // holds. Bounded rather than open, because a span that has gone to infinity
     // under a degenerate view would otherwise not stop.
-    const double wanted = 2.0 * (high - low) / static_cast<double>(buckets);
+    //
+    // The run is still twice the pane. That factor used to live in the bucket,
+    // which made one bucket two to four pixels wide: the two extremes then sat
+    // apart and the stroke between them was the diagonal of an empty column.
+    // It lives on the run now, so a bucket is one to two pixels and a pan off
+    // the middle is still data already in hand.
+    const double wanted = (high - low) / static_cast<double>(buckets);
     long long bucket = 1;
     while (static_cast<double>(bucket) < wanted && bucket < (std::int64_t{1} << 40)) {
         bucket <<= 1;
     }
 
-    const long long span = bucket * buckets;
+    const long long span = bucket * buckets * 2;
     if (span >= length) {
         // The whole-line summary already covers this much at this bucket or
         // finer. There is nothing a second read could add.
         return {};
     }
 
-    const long long stride = std::max<long long>(bucket, (buckets / 4) * bucket);
+    // A quarter of the run, which is twice the pane: (buckets / 2) buckets of
+    // the caller's count. Stepping by that leaves the run in hand covering the
+    // pane for one step past the boundary that asked for the next one.
+    const long long stride = std::max<long long>(bucket, (buckets / 2) * bucket);
     // Clamped in double before the cast: a view a long way off the data gives a
     // bound that does not fit in a long long at all.
     const double aligned =
@@ -167,7 +176,9 @@ double xOf(const PlotLine& line, const PlotAxis& axis, qsizetype at)
         const double x = line.xs[at];
         return std::isfinite(x) ? x : std::numeric_limits<double>::quiet_NaN();
     }
-    const double position = line.positionStart + static_cast<double>(at) * line.positionStep;
+    const double position = line.positions != nullptr
+                                ? line.positions[at]
+                                : line.positionStart + static_cast<double>(at) * line.positionStep;
     if (!axis.explicitX()) {
         return axis.start + position * axis.step;
     }
@@ -264,7 +275,8 @@ QPointF uprightPoint(const QPointF& onPane, const PlotView& view)
 }
 
 PlotProjected projectLine(const PlotLine& line, const PlotAxis& axis, const PlotView& view,
-                          std::vector<QPointF>& points, std::vector<PlotRun>& runs)
+                          std::vector<QPointF>& points, std::vector<PlotRun>& runs,
+                          std::vector<QPointF>* data)
 {
     const auto startRuns = static_cast<int>(runs.size());
     const auto added = [&](bool decimated) {
@@ -309,15 +321,21 @@ PlotProjected projectLine(const PlotLine& line, const PlotAxis& axis, const Plot
             // Dropping it keeps the counts honest rather than emitting a
             // vertex pair that rasterises to nothing.
             points.pop_back();
+            if (data != nullptr && !data->empty()) {
+                data->pop_back();
+            }
         }
         open = -1;
     };
-    const auto place = [&](double px, double py) {
+    const auto place = [&](double px, double py, double x, double y) {
         if (open < 0) {
             open = static_cast<int>(points.size());
         }
         points.emplace_back(std::clamp(px, -kFarAway, kFarAway),
                             std::clamp(py, -kFarAway, kFarAway));
+        if (data != nullptr) {
+            data->emplace_back(x, y);
+        }
     };
 
     const auto count = static_cast<std::int64_t>(line.count);
@@ -344,7 +362,7 @@ PlotProjected projectLine(const PlotLine& line, const PlotAxis& axis, const Plot
                 closeRun();
                 continue;
             }
-            place(toX(x), toY(value));
+            place(toX(x), toY(value), x, value);
         }
         closeRun();
         // Every point here was drawn, so nothing was summarised *by this* --
@@ -369,7 +387,26 @@ PlotProjected projectLine(const PlotLine& line, const PlotAxis& axis, const Plot
 
     std::int64_t first = 0;
     std::int64_t last = count - 1;
-    if (std::abs(dx) > 0.0) {
+    // A line that names a position per point is not spaced by `positionStep`:
+    // the step is still half a bucket, and a point added where the curve
+    // leaves that chord sits somewhere else. The window is a range of those
+    // positions. They are written in order.
+    if (line.positions != nullptr && std::abs(axis.step) > 0.0 && count > 0) {
+        const double origin = axis.start;
+        auto indexOf = [&](double x) { return (x - origin) / axis.step; };
+        double low = indexOf(view.xMin);
+        double high = indexOf(view.xMax);
+        if (low > high) {
+            std::swap(low, high);
+        }
+        const double* const begin = line.positions;
+        const double* const end = begin + count;
+        const double* const from = std::lower_bound(begin, end, low);
+        const double* const to = std::upper_bound(begin, end, high);
+        first = std::max<std::int64_t>(0, static_cast<std::int64_t>(from - begin) - 1);
+        last = std::min<std::int64_t>(count - 1, static_cast<std::int64_t>(to - begin));
+    }
+    else if (std::abs(dx) > 0.0) {
         // One sample either side of the window, so the line enters and leaves
         // the pane at its edges instead of stopping a pixel short of them.
         double lowAt = (view.xMin - x0) / dx;
@@ -404,17 +441,26 @@ PlotProjected projectLine(const PlotLine& line, const PlotAxis& axis, const Plot
     }
     columns = std::max<std::int64_t>(columns, 1);
 
-    if (visible <= static_cast<std::int64_t>(kSamplesPerColumn) * columns) {
+    // Positions already say where each point sits. Folding them again would
+    // throw away the samples added where the chord left the curve, and the
+    // line would be back to two extremes a bucket.
+    if (line.positions != nullptr ||
+        visible <= static_cast<std::int64_t>(kSamplesPerColumn) * columns) {
         // Zoomed in far enough that the envelope would emit more vertices than
         // there are values. Draw them.
         for (std::int64_t i = first; i <= last; ++i) {
             const double value = line.values[i];
-            const double x = x0 + static_cast<double>(i) * dx;
+            // An envelope that names where its extremes occurred is drawn
+            // there. The step still spaces the window's clip; the point does
+            // not have to sit on it.
+            const double x = line.positions != nullptr
+                                 ? xOf(line, axis, static_cast<qsizetype>(i))
+                                 : x0 + static_cast<double>(i) * dx;
             if (!yMap.draws(value) || !xMap.draws(x)) {
                 closeRun();
                 continue;
             }
-            place(toX(x), toY(value));
+            place(toX(x), toY(value), x, value);
         }
         closeRun();
         // ...and they are samples only if the model did not summarise them on
@@ -525,32 +571,36 @@ PlotProjected projectLine(const PlotLine& line, const PlotAxis& axis, const Plot
             continue;
         }
 
-        // The two extremes occurred somewhere inside the bucket, and a bucket
-        // is a pixel or two wide. Putting them at its start and its middle is
-        // the nearest thing to where they were that costs nothing to say -- and
-        // at a bucket of two samples it is exactly where they were.
-        const double xFirst = x0 + static_cast<double>(i0) * dx;
-        const double xMiddle =
-            x0 + (static_cast<double>(i0) + static_cast<double>(size) / 2.0) * dx;
-        if (!xMap.draws(xFirst) || !xMap.draws(xMiddle)) {
+        // The index is already known: the scan above kept it. A straight line
+        // from the bucket's start to its middle would cross into the next
+        // column halfway through the rise, whichever sample the extreme was.
+        // A line that arrived already folded names that sample in `positions`;
+        // folding it again, because the pane is narrower than the summary,
+        // has to draw the extreme at that sample and not at its place in the
+        // summary.
+        const double xLow = line.positions != nullptr
+                                ? xOf(line, axis, static_cast<qsizetype>(lowIndex))
+                                : x0 + static_cast<double>(lowIndex) * dx;
+        const double xHigh = line.positions != nullptr
+                                 ? xOf(line, axis, static_cast<qsizetype>(highIndex))
+                                 : x0 + static_cast<double>(highIndex) * dx;
+        if (!xMap.draws(xLow) || !xMap.draws(xHigh)) {
             // Both stations of a bucket are on the axis or the bucket is not
             // drawn, which on a logarithmic axis is every bucket at or below
             // zero. A gap, for the reason every gap here is one.
             closeRun();
             continue;
         }
-        const double atFirst = toX(xFirst);
-        const double atMiddle = toX(xMiddle);
         if (lowIndex == highIndex) {
-            place(atFirst, toY(lowest));
+            place(toX(xLow), toY(lowest), xLow, lowest);
         }
         else if (lowIndex < highIndex) {
-            place(atFirst, toY(lowest));
-            place(atMiddle, toY(highest));
+            place(toX(xLow), toY(lowest), xLow, lowest);
+            place(toX(xHigh), toY(highest), xHigh, highest);
         }
         else {
-            place(atFirst, toY(highest));
-            place(atMiddle, toY(lowest));
+            place(toX(xHigh), toY(highest), xHigh, highest);
+            place(toX(xLow), toY(lowest), xLow, lowest);
         }
     }
     closeRun();

@@ -134,6 +134,37 @@ void reduceBuckets(const double* values, long long count, long long bucket,
     reduceBucketsInto(values, count, width, out.data() + was);
 }
 
+void reduceBucketsLocated(const double* values, long long count, long long bucket, long long origin,
+                          std::vector<double>& out, std::vector<double>& positions)
+{
+    if (values == nullptr || count <= 0) {
+        return;
+    }
+    const long long width = std::max<long long>(bucket, 1);
+    const long long taken = (count + width - 1) / width;
+    const auto nothing = std::numeric_limits<double>::quiet_NaN();
+    out.reserve(out.size() + static_cast<std::size_t>(taken) * 2);
+    positions.reserve(positions.size() + static_cast<std::size_t>(taken) * 2);
+    for (long long b = 0; b < taken; ++b) {
+        const long long from = b * width;
+        const long long to = std::min(from + width, count);
+        const Extremes found = extremesOf(values, from, to);
+        if (!found.found()) {
+            // The same gap reduceBuckets writes. The index is the bucket's
+            // start, and nothing draws it.
+            out.push_back(nothing);
+            out.push_back(nothing);
+            positions.push_back(static_cast<double>(origin + from));
+            positions.push_back(static_cast<double>(origin + from));
+            continue;
+        }
+        out.push_back(found.first());
+        out.push_back(found.second());
+        positions.push_back(static_cast<double>(origin + found.firstAt()));
+        positions.push_back(static_cast<double>(origin + found.secondAt()));
+    }
+}
+
 void coarsenEnvelopeInto(const double* pairs, long long buckets, long long factor, double* out)
 {
     if (pairs == nullptr || out == nullptr || buckets <= 0) {

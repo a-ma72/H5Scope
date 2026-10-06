@@ -436,13 +436,17 @@ private:
 
         PlotWindow window;
         /// Table positions between one drawn point of this run and the next,
-        /// and how many of them there are. Half a bucket, for the reason
-        /// PlotLine::positionStep gives.
+        /// and how many of them there are. Half a bucket, so a window still
+        /// turns back into a range of indices. Where an extreme is *drawn*
+        /// is `positions`, when that run has them.
         double step = 1.0;
         int points = 0;
         /// One entry per drawn line, keyed as `lines_` is. Borrowed by the
         /// renderer on exactly the same terms.
         std::map<int, std::vector<double>> lines;
+        /// Element index of each value in `lines`, same keys, borrowed with
+        /// them. Empty when the run is the samples themselves.
+        std::map<int, std::vector<double>> positions;
 
     };
 
@@ -602,6 +606,9 @@ private:
     /// Pruned to the drawn set on every sample, so what is held is what is on
     /// screen and a line that goes away stops costing memory.
     mutable std::map<int, std::vector<double>> lines_;
+    /// Element index of each value in `lines_`, keyed the same way and retired
+    /// with it. Empty for a line drawn sample for sample.
+    mutable std::map<int, std::vector<double>> positions_;
 
     /// Each drawn line held whole, at every resolution it will be drawn at.
     ///

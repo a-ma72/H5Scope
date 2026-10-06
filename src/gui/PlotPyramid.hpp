@@ -202,8 +202,42 @@ private:
 /// pair per bucket otherwise. False when the pyramid cannot answer -- it holds
 /// nothing, or the window is finer than its base, or the window is not aligned
 /// to a bucket the pyramid has. The caller reads the file for those.
+///
+/// `positions`, when it is set, receives where each value occurred: one
+/// element index per value in `out`, in the same order, and cleared when the
+/// bucket is one because those values *are* the elements and the index is the
+/// step. With a base of one a summarised bucket is the two extremes after the
+/// crossing at each edge has joined them. A flank keeps the positions the
+/// extremes occurred at, so a straight line stays that line. A turn inside the
+/// bucket writes both at the column, and the stroke there is vertical. A
+/// crossing that lies between the extremes is not a third point. A coarser
+/// base has no seam left to name, and the pair comes back at the positions the
+/// fold found. The positions are looked up from the levels already held, and
+/// the pyramid does not grow to remember them. Null leaves the fold as it was,
+/// a pair half a bucket apart with no index beside it.
 [[nodiscard]] bool fillWindow(const LinePyramid& pyramid, const PlotWindow& window,
-                              std::vector<double>& out);
+                              std::vector<double>& out,
+                              std::vector<double>* positions = nullptr);
+
+/// Where the straight line between the extremes leaves the curve, add the sample.
+///
+/// A bucket keeps its smallest and its largest, and the stroke between them is
+/// a straight line. On a sine whose period is a few buckets that line *is* the
+/// flank, and the wave is drawn as a triangle with the right peaks in the
+/// right places. The samples that would have bent it are still in the pyramid.
+///
+/// `yTolerance` is one pixel, in the line's own units. Between each pair already
+/// in `values`, the finer levels are asked which of their extremes sits
+/// furthest off that line. Farther than a pixel, it is inserted and both
+/// pieces are asked again. A run the line already fits, and a segment with
+/// nothing between its ends, stay as they are. `budget` caps how many points
+/// may be added, so a noisy line stays a pane rather than becoming the file.
+/// The extremes passed in are kept, which is what still catches a spike.
+///
+/// No-op unless `yTolerance` is positive and `positions` names every value.
+/// The pyramid is not grown and nothing is read.
+void followCurve(const LinePyramid& pyramid, std::vector<double>& values,
+                 std::vector<double>& positions, double yTolerance, int budget);
 
 /// Fold the whole line into about `buckets` buckets, as the whole-line summary.
 ///
@@ -213,8 +247,13 @@ private:
 /// is a distinction only a line too large to hold raw ever notices: with a base
 /// of one every stride is a multiple of it and the answer is what the file
 /// would have given, element for element.
+///
+/// `positions` is the same option `fillWindow` takes. `step` stays half a
+/// bucket either way: it is what a caller that does not ask for positions
+/// spaces the pair by, and what turns a window back into a range of indices.
 [[nodiscard]] bool fillWhole(const LinePyramid& pyramid, int buckets, std::vector<double>& out,
-                             long long& stride, double& step);
+                             long long& stride, double& step,
+                             std::vector<double>* positions = nullptr);
 
 /// The extremes of elements `[first, last)`, out of whichever levels cover
 /// that run in the fewest buckets.
@@ -226,9 +265,12 @@ private:
 /// the base there is nothing left to cut with; with a base of one that rounds
 /// nothing.
 ///
-/// `lowAt` and `highAt` say where each extreme sat closely enough to put the
-/// two in the order they occurred -- the element itself at the base, a bucket's
-/// start or middle above it -- which is all Extremes::first() asks of them.
+/// `lowAt` and `highAt` are the elements the extremes occurred at, walked down
+/// from whichever bucket held the value to the finest level still in hand. At
+/// a base of one that is the sample. Above it the walk stops on the base
+/// bucket and the index is that bucket's start or its middle -- the same
+/// stand-in a fold with no finer level has always used, and still enough to
+/// order the pair.
 [[nodiscard]] Extremes extremesOver(const LinePyramid& pyramid, long long first, long long last);
 
 /// The smallest value above zero anywhere in the line, into `out`; false when
@@ -256,8 +298,9 @@ private:
 /// A column narrow enough to hold one or two elements holds *them*, drawn at
 /// their own positions, because an envelope of two elements is those two
 /// elements with a claim of summary on them; anything wider is its extremes,
-/// in the order they occurred, at its first element and half way along it --
-/// half a bucket apart, as every envelope here is.
+/// in the order they occurred, at the samples `extremesOver` names. A straight
+/// line between the column's start and its middle would split the rise across
+/// the two columns by distance rather than by where the extreme sat.
 struct ColumnFold
 {
     std::vector<double> values;
@@ -276,7 +319,8 @@ struct ColumnFold
 /// column narrower than one element holds nothing and adds nothing. A column
 /// with nothing finite in it is one NaN, which is a gap.
 ///
-/// `out` is cleared first. Its size is at most twice the number of columns.
+/// `out` is cleared first. A column that still has its samples is two values,
+/// both at the column: the extremes, the crossing at each edge included.
 void foldColumns(const LinePyramid& pyramid, std::span<const double> edges, ColumnFold& out);
 
 } // namespace gui
