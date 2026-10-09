@@ -5,6 +5,7 @@
 
 #include "H5Session.hpp"
 #include "PlotBudget.hpp"
+#include "PlotColumns.hpp"
 #include "PlotLevels.hpp"
 #include "PlotPyramid.hpp"
 #include "h5core/Dataset.hpp"
@@ -28,6 +29,7 @@
 #include <map>
 #include <memory>
 #include <numeric>
+#include <span>
 #include <optional>
 #include <utility>
 
@@ -1168,7 +1170,10 @@ void CustomPlot::setXLog(bool logarithmic)
 std::optional<LogColumns> CustomPlot::foldWanted() const
 {
     const int drawn = seriesCount();
-    if (!xLog_ || drawn == 0 || drawn > kCrowdedLines) {
+    if (drawn == 0 || drawn > kCrowdedLines) {
+        return {};
+    }
+    if (!std::isfinite(viewMin_) || !std::isfinite(viewMax_) || !(viewMax_ > viewMin_)) {
         return {};
     }
     if (xMode_ == Dataset) {
@@ -1183,13 +1188,16 @@ std::optional<LogColumns> CustomPlot::foldWanted() const
     else if (!std::isfinite(xStart_) || !std::isfinite(xStep_) || !(std::abs(xStep_) > 0.0)) {
         return {};
     }
-    return logColumnsFor(viewMin_, viewMax_, bucketBudget());
+    // Engaged optional: column strokes cover linear and log. LogColumns value
+    // unused by the stroke path.
+    return LogColumns{};
 }
 
 bool CustomPlot::foldServes() const
 {
-    return foldGrid_.serves(xStart_, xStep_, static_cast<int>(xMode_), bucketBudget(), viewMin_,
-                            viewMax_);
+    return foldArmed_ && foldGrid_.start == xStart_ && foldGrid_.step == xStep_ &&
+           foldGrid_.mode == static_cast<int>(xMode_) && foldGrid_.buckets == bucketBudget() &&
+           foldViewMin_ == viewMin_ && foldViewMax_ == viewMax_;
 }
 
 void CustomPlot::dropFold() const
@@ -1200,6 +1208,7 @@ void CustomPlot::dropFold() const
         entry.foldGeneration = -1;
     }
     foldGrid_.clear();
+    foldArmed_ = false;
     ++foldGeneration_;
 }
 
@@ -1280,39 +1289,47 @@ bool CustomPlot::foldedLine(const Entry& entry, PlotLine& line) const
         return false;
     }
     if (!foldServes()) {
-        // Another grid. Every entry's fold goes with the one it was made on --
+        // Another view. Every entry's fold goes with the one it was made on --
         // retired rather than freed, because the renderer is drawing them
         // until it is handed these.
         dropFold();
-        foldGrid_.remake(xStart_, xStep_, static_cast<int>(xMode_), bucketBudget(), viewMin_,
-                         viewMax_);
-    }
-    if (!foldGrid_.columns.has_value()) {
-        return false;
+        foldGrid_.start = xStart_;
+        foldGrid_.step = xStep_;
+        foldGrid_.mode = static_cast<int>(xMode_);
+        foldGrid_.buckets = bucketBudget();
+        foldViewMin_ = viewMin_;
+        foldViewMax_ = viewMax_;
+        foldArmed_ = true;
     }
     if (entry.foldGeneration != foldGeneration_) {
         retire(entry.foldValues);
         retire(entry.foldXs);
-        // An element of this entry sits at `scale` axis positions per
-        // element: one under Align, the axis over the line under Stretch.
         const double scale = stretchScale(entry);
-        std::vector<double> edges;
+        ColumnStroke stroke;
+        bool ok = false;
         if (xMode_ == Dataset) {
-            timeEdges(*foldGrid_.columns, scale, edges);
+            // Time base as x. Needs the raw (or base-1) times in hand.
+            std::span<const double> times;
+            if (!axis_.pyramid.empty() && axis_.pyramid.baseBucket() == 1) {
+                times = axis_.pyramid.levels.front().values;
+            } else if (!axis_.values.empty()) {
+                times = axis_.values;
+            }
+            if (!times.empty() && static_cast<long long>(times.size()) == entry.pyramid.length) {
+                ok = rasterColumns(entry.pyramid, nullptr, entry.pyramid.length, times, 0.0, 1.0,
+                                   viewMin_, viewMax_, bucketBudget(), xLog_, stroke);
+            }
+        } else {
+            ok = rasterColumns(entry.pyramid, nullptr, entry.pyramid.length, {}, xStart_,
+                               xStep_ * scale, viewMin_, viewMax_, bucketBudget(), xLog_, stroke);
         }
-        else {
-            edgesAlong(*foldGrid_.columns, xStart_, xStep_ * scale, edges);
+        if (!ok) {
+            entry.foldGeneration = -1;
+            return false;
         }
-        ColumnFold folded;
-        foldColumns(entry.pyramid, edges, folded);
-        std::vector<double> xs(folded.positions.size());
-        for (std::size_t i = 0; i < xs.size(); ++i) {
-            const double at = folded.positions[i] * scale;
-            xs[i] = xMode_ == Dataset ? timeAt(std::llround(at)) : xStart_ + at * xStep_;
-        }
-        entry.foldValues = std::move(folded.values);
-        entry.foldXs = std::move(xs);
-        entry.foldSummarised = folded.summarised;
+        entry.foldValues = std::move(stroke.values);
+        entry.foldXs = std::move(stroke.xs);
+        entry.foldSummarised = stroke.summarised;
         entry.foldGeneration = foldGeneration_;
     }
     line.values = entry.foldValues.data();
@@ -1457,6 +1474,73 @@ int CustomPlot::closerBuckets() const
     return seriesCount() <= kCrowdedLines ? std::min(2 * pane, kMaxPoints) : pane;
 }
 
+
+void CustomPlot::bend(const LinePyramid& pyramid, std::vector<double>& values,
+                      std::vector<double>& positions) const
+{
+    if (positions.size() != values.size()) {
+        positions.clear();
+        return;
+    }
+    followCurve(pyramid, values, positions, yPerPixel_, curveBudget(bucketBudget()));
+}
+
+void CustomPlot::rebend(Entry& entry)
+{
+    if (entry.pyramid.empty()) {
+        entry.foldGeneration = -1;
+        return;
+    }
+    if (!entry.values.empty()) {
+        std::vector<double> values;
+        std::vector<double> positions;
+        long long stride = 1;
+        double step = entry.step;
+        if (fillWhole(entry.pyramid, std::max(bucketBudget(), 1), values, stride, step, &positions)) {
+            bend(entry.pyramid, values, positions);
+            retire(entry.values);
+            retire(entry.positions);
+            entry.values = std::move(values);
+            entry.positions = std::move(positions);
+            entry.step = step;
+            entry.summarised = stride > 1;
+        }
+    }
+    for (Level& level : entry.levels) {
+        std::vector<double> folded;
+        std::vector<double> positions;
+        if (!fillWindow(entry.pyramid, level.window, folded, &positions)) {
+            continue;
+        }
+        bend(entry.pyramid, folded, positions);
+        const double step = level.window.bucket == 1 ? 1.0 : static_cast<double>(level.window.bucket) / 2.0;
+        retire(level.values);
+        retire(level.positions);
+        level.values = std::move(folded);
+        level.positions = std::move(positions);
+        level.step = step;
+    }
+    entry.foldGeneration = -1;
+}
+
+void CustomPlot::setYPerPixel(double value)
+{
+    if (!(value > 0.0) || !std::isfinite(value)) {
+        value = 0.0;
+    }
+    const double scale = std::max(std::abs(yPerPixel_), std::abs(value));
+    if (value == yPerPixel_ || (scale > 0.0 && std::abs(value - yPerPixel_) <= scale * 1e-3)) {
+        return;
+    }
+    yPerPixel_ = value;
+    rebend(axis_);
+    for (Entry& entry : entries_) {
+        rebend(entry);
+    }
+    ++foldGeneration_;
+    announce();
+    refreshCloser();
+}
 
 void CustomPlot::setPaneColumns(int columns)
 {
@@ -1781,9 +1865,7 @@ bool CustomPlot::fillCloser(Entry& entry, const PlotWindow& window)
     // elements themselves when the bucket is one. The step stays half a
     // bucket; the positions are the samples the extremes occurred at.
     const double step = window.bucket == 1 ? 1.0 : static_cast<double>(window.bucket) / 2.0;
-    if (positions.size() != folded.size()) {
-        positions.clear();
-    }
+    bend(entry.pyramid, folded, positions);
     // The same hazard DatasetPlot::takeDetail names: this push_back may
     // reallocate `levels` while the renderer is reading a run already in it, so
     // a Level is move-only-by-noexcept and the relocation cannot be a copy.
@@ -2081,9 +2163,12 @@ void CustomPlot::askForCloser()
                     [&window](const Level& level) { return level.window == window; });
                 if (at == entry.levels.end()) {
                     const bool ok = answer.problem.isEmpty();
-                    entry.levels.push_back(
-                        Level{window, answer.step, ok ? std::move(answer.values) : std::vector<double>{},
-                              ok ? std::move(answer.positions) : std::vector<double>{}});
+                    Level level{window, answer.step, ok ? std::move(answer.values) : std::vector<double>{},
+                                ok ? std::move(answer.positions) : std::vector<double>{}};
+                    if (ok) {
+                        bend(entry.pyramid, level.values, level.positions);
+                    }
+                    entry.levels.push_back(std::move(level));
                 }
                 else {
                     at->step = answer.step;
@@ -2095,6 +2180,9 @@ void CustomPlot::askForCloser()
                     const bool ok = answer.problem.isEmpty();
                     at->values = ok ? std::move(answer.values) : std::vector<double>{};
                     at->positions = ok ? std::move(answer.positions) : std::vector<double>{};
+                    if (ok) {
+                        bend(entry.pyramid, at->values, at->positions);
+                    }
                 }
                 trimLevels(entry);
             }
@@ -2601,6 +2689,7 @@ void CustomPlot::refresh()
                 // closer look at this entry from here on is a fold of these
                 // rather than a second reading of the file.
                 entry.pyramid = std::move(answer.pyramid);
+                bend(entry.pyramid, entry.values, entry.positions);
             }
             // Whatever was being looked at closely was a run of the lines as
             // they were before this read. The expression may have been retyped

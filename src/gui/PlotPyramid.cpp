@@ -463,11 +463,12 @@ namespace {
 /// the next column from cutting this one short. When it lies between them it
 /// changes nothing and is not stored.
 ///
-/// A flank runs from one edge to the other, and the stroke is that diagonal,
-/// at the positions where the extremes sit. Standing both on the column would
-/// lay this diagonal over the next column's, and a straight line would grow a
-/// lump at every seam. A turn inside the column has no such diagonal: both
-/// stand on the column, and the stroke there is vertical.
+/// Each extreme keeps the position it occurred at. Standing a turn on the
+/// column centre made the bar vertical there, and the stroke from that bar to
+/// the next column was a triangle the width of the bucket: the spike drawn a
+/// bucket away from the sample, until the next octave made the bucket narrow
+/// enough to hold the spike alone. The chord between the true positions is
+/// what `followCurve` bends back onto the samples.
 void placeColumn(double& y0, double& y1, double& x0, double& x1, double columnAt,
                  const double* raw, long long rawCount, double leftEdge, double rightEdge)
 {
@@ -512,20 +513,17 @@ void placeColumn(double& y0, double& y1, double& x0, double& x1, double columnAt
         x0 = x1 = columnAt;
         return;
     }
-    const double earlier = std::min(lowAt, highAt);
-    const double later = std::max(lowAt, highAt);
-    const bool flank = earlier <= leftEdge + 1.0 && later >= rightEdge - 1.0;
     if (lowAt <= highAt) {
         y0 = low;
         y1 = high;
-        x0 = flank ? lowAt : columnAt;
-        x1 = flank ? highAt : columnAt;
+        x0 = lowAt;
+        x1 = highAt;
     }
     else {
         y0 = high;
         y1 = low;
-        x0 = flank ? highAt : columnAt;
-        x1 = flank ? lowAt : columnAt;
+        x0 = highAt;
+        x1 = lowAt;
     }
 }
 
@@ -1004,8 +1002,9 @@ void foldColumns(const LinePyramid& pyramid, std::span<const double> edges, Colu
             continue;
         }
         // The same column the linear fold draws. The crossing at each edge
-        // joins the extremes, and both stand on the column. Above a base of
-        // one the pair is all the level kept, at the positions it was found.
+        // joins the extremes, each at the position it occurred at. Above a
+        // base of one the pair is all the level kept, at the positions it was
+        // found.
         if (base == 1) {
             double y0 = found.first();
             double y1 = found.second();

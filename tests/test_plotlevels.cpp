@@ -14,6 +14,7 @@
 // towards where the pointer is, which is the one thing the surface always knew
 // and never said.
 
+#include "gui/PlotColumns.hpp"
 #include "gui/PlotLevels.hpp"
 #include "gui/PlotProjection.hpp"
 #include "gui/PlotPyramid.hpp"
@@ -769,8 +770,9 @@ TEST_CASE("a column is the two extremes, the crossing at each edge included",
 {
     // The peak of the second bucket is 20. The line crosses into it halfway
     // between 4 and 20, at 12, and that crossing is above everything the first
-    // bucket holds, so it becomes the first column's maximum. It is below the
-    // peak, so the second column keeps 20. Both ends of a column stand on it.
+    // bucket holds, so it becomes the first column's maximum, at the edge it
+    // crossed. It is below the peak, so the second column keeps 20, at the
+    // sample the peak is. Neither pair is moved to the column's middle.
     constexpr long long kCount = 16;
     std::vector<double> line{1.0, 5.0, 0.0, 9.0, 2.0, 2.0, 3.0, 4.0,
                              20.0, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0};
@@ -783,13 +785,76 @@ TEST_CASE("a column is the two extremes, the crossing at each edge included",
 
     CHECK(values[0] == 0.0);
     CHECK(values[1] == 12.0);
-    CHECK(positions[0] == 3.5);
-    CHECK(positions[1] == 3.5);
+    CHECK(positions[0] == 2.0);
+    CHECK(positions[1] == 7.5);
 
     CHECK(values[2] == 20.0);
     CHECK(values[3] == 0.0);
-    CHECK(positions[2] == 11.5);
-    CHECK(positions[3] == 11.5);
+    CHECK(positions[2] == 8.0);
+    CHECK(positions[3] == 12.0);
+}
+
+TEST_CASE("a spike inside a bucket stays at its sample once the chord is bent",
+          "[levels][pyramid]")
+{
+    // Both extremes used to stand on the column centre. The stroke from that
+    // bar to the next column was a triangle the width of the bucket, and the
+    // spike was drawn a bucket away from the sample it was. The next octave
+    // in was the first picture that held the spike in a bucket of its own.
+    constexpr long long kCount = 128;
+    std::vector<double> line(static_cast<std::size_t>(kCount), 0.0);
+    line[40] = 100.0;
+    line[90] = -40.0;
+    const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), kCount, 1);
+    std::vector<double> values;
+    std::vector<double> positions;
+    REQUIRE(gui::fillWindow(pyramid, gui::PlotWindow{0, kCount, 64, 2}, values, &positions));
+    REQUIRE(positions.size() == values.size());
+    bool peak = false;
+    bool trough = false;
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (values[i] == 100.0) {
+            CHECK(positions[i] == 40.0);
+            peak = true;
+        }
+        if (values[i] == -40.0) {
+            CHECK(positions[i] == 90.0);
+            trough = true;
+        }
+    }
+    CHECK(peak);
+    CHECK(trough);
+
+    const double tolerance = 1.0;
+    gui::followCurve(pyramid, values, positions, tolerance, gui::curveBudget(64));
+    REQUIRE(positions.size() == values.size());
+    REQUIRE(std::is_sorted(positions.begin(), positions.end()));
+    peak = false;
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (values[i] == 100.0 && positions[i] == 40.0) {
+            peak = true;
+        }
+    }
+    CHECK(peak);
+    double worst = 0.0;
+    for (std::size_t i = 1; i < positions.size(); ++i) {
+        const double i0 = positions[i - 1];
+        const double i1 = positions[i];
+        const double y0 = values[i - 1];
+        const double y1 = values[i];
+        if (!(i1 > i0)) {
+            continue;
+        }
+        for (long long k = static_cast<long long>(std::floor(i0)) + 1;
+             k < static_cast<long long>(std::ceil(i1)); ++k) {
+            if (k < 0 || k >= kCount) {
+                continue;
+            }
+            const double on = y0 + (static_cast<double>(k) - i0) / (i1 - i0) * (y1 - y0);
+            worst = std::max(worst, std::abs(line[static_cast<std::size_t>(k)] - on));
+        }
+    }
+    CHECK(worst <= tolerance);
 }
 
 TEST_CASE("a chord that leaves the curve gains the sample it missed", "[levels][pyramid]")
@@ -871,7 +936,7 @@ TEST_CASE("a logarithmic pane is folded one envelope per column, from the first 
     REQUIRE(fold.values.size() == fold.positions.size());
     CHECK(fold.summarised);
     // Two values a column: the extremes, the crossing at each edge included,
-    // both at the column. Narrower than that, the samples themselves.
+    // each where it occurred. Narrower than that, the samples themselves.
     CHECK(fold.values.size() <= 2 * edges.size());
     CHECK(fold.values.size() <= 16 * static_cast<std::size_t>(kColumns) + 2);
     REQUIRE(std::is_sorted(fold.positions.begin(), fold.positions.end()));
@@ -941,8 +1006,8 @@ TEST_CASE("a logarithmic pane is folded one envelope per column, from the first 
                 continue;
             }
             REQUIRE(at < fold.values.size());
-            // The two extremes after each edge's crossing has joined them.
-            // A flank keeps the positions; a turn stands both on the column.
+            // The two extremes after each edge's crossing has joined them,
+            // each at the position it occurred at.
             double low = 0.0;
             double high = 0.0;
             double lowAt = 0.0;
@@ -989,22 +1054,18 @@ TEST_CASE("a logarithmic pane is folded one envelope per column, from the first 
             crossing(edges[c]);
             crossing(edges[c + 1]);
             REQUIRE(have);
-            const double earlier = std::min(lowAt, highAt);
-            const double later = std::max(lowAt, highAt);
-            const bool flank = earlier <= edges[c] + 1.0 && later >= edges[c + 1] - 1.0;
-            const double columnAt = 0.5 * (edges[c] + edges[c + 1]);
             REQUIRE(at + 2 <= fold.values.size());
             if (lowAt <= highAt) {
                 CHECK(fold.values[at] == low);
                 CHECK(fold.values[at + 1] == high);
-                CHECK(fold.positions[at] == (flank ? lowAt : columnAt));
-                CHECK(fold.positions[at + 1] == (flank ? highAt : columnAt));
+                CHECK(fold.positions[at] == lowAt);
+                CHECK(fold.positions[at + 1] == highAt);
             }
             else {
                 CHECK(fold.values[at] == high);
                 CHECK(fold.values[at + 1] == low);
-                CHECK(fold.positions[at] == (flank ? highAt : columnAt));
-                CHECK(fold.positions[at + 1] == (flank ? lowAt : columnAt));
+                CHECK(fold.positions[at] == highAt);
+                CHECK(fold.positions[at + 1] == lowAt);
             }
             at += 2;
         }
@@ -1273,4 +1334,95 @@ TEST_CASE("a pyramid is coarsened to a smaller budget and refuses a larger one",
     const long long coarse = pyramid.baseBucket();
     CHECK_FALSE(gui::fitToBudget(pyramid, gui::pyramidDoubles(30000, 1)));
     CHECK(pyramid.baseBucket() == coarse);
+}
+
+TEST_CASE("column edges partition the view without gaps", "[levels][columns]")
+{
+    std::vector<double> edges;
+    gui::columnEdges(0.0, 10.0, 5, false, edges);
+    REQUIRE(edges.size() == 6);
+    CHECK(edges.front() == Approx(0.0));
+    CHECK(edges.back() == Approx(10.0));
+    for (std::size_t i = 1; i < edges.size(); ++i) {
+        CHECK(edges[i] > edges[i - 1]);
+        CHECK(gui::columnOf(edges, 0.5 * (edges[i - 1] + edges[i])) == static_cast<int>(i - 1));
+    }
+    CHECK(gui::columnOf(edges, 10.0) == 4);
+    CHECK(gui::columnOf(edges, -0.1) == -1);
+}
+
+TEST_CASE("a one-sample spike survives the column stroke", "[levels][columns]")
+{
+    std::vector<double> line(10'000, 0.0);
+    line[4'000] = 17.0;
+    const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), 10'000, 1);
+    gui::ColumnStroke stroke;
+    REQUIRE(gui::rasterColumns(pyramid, line.data(), 10'000, {}, 0.0, 9'999.0, 256, false, stroke));
+    REQUIRE_FALSE(stroke.values.empty());
+    CHECK(stroke.summarised);
+    CHECK(std::any_of(stroke.values.begin(), stroke.values.end(),
+                      [](double y) { return y == 17.0; }));
+}
+
+TEST_CASE("one sample per column is a polyline through the samples", "[levels][columns]")
+{
+    // Ten samples, ten columns: nothing summarised.
+    std::vector<double> line(10);
+    for (int i = 0; i < 10; ++i) {
+        line[static_cast<std::size_t>(i)] = static_cast<double>(i);
+    }
+    const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), 10, 1);
+    gui::ColumnStroke stroke;
+    REQUIRE(gui::rasterColumns(pyramid, line.data(), 10, {}, 0.0, 9.0, 10, false, stroke));
+    CHECK_FALSE(stroke.summarised);
+    REQUIRE(stroke.values.size() == 10);
+    for (int i = 0; i < 10; ++i) {
+        CHECK(stroke.values[static_cast<std::size_t>(i)] == Approx(static_cast<double>(i)));
+        CHECK(stroke.xs[static_cast<std::size_t>(i)] == Approx(static_cast<double>(i)));
+    }
+}
+
+TEST_CASE("entry at a column edge follows the slope from the previous sample",
+          "[levels][columns]")
+{
+    // Rising ramp, many samples per column. The segment into a column from the
+    // sample before it must meet the left edge between the previous y and the
+    // first extreme — not jump to the column's min/max alone.
+    std::vector<double> line(100);
+    for (int i = 0; i < 100; ++i) {
+        line[static_cast<std::size_t>(i)] = static_cast<double>(i);
+    }
+    const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), 100, 1);
+    gui::ColumnStroke stroke;
+    REQUIRE(gui::rasterColumns(pyramid, line.data(), 100, {}, 0.0, 99.0, 10, false, stroke));
+    REQUIRE(stroke.summarised);
+    REQUIRE(stroke.xs.size() == stroke.values.size());
+    REQUIRE(stroke.xs.size() >= 2);
+
+    std::vector<double> edges;
+    gui::columnEdges(0.0, 99.0, 10, false, edges);
+    // First vertex on or after the second column edge should be the entry
+    // (or an extreme on the edge). Its y equals the edge's index on a ramp.
+    bool found = false;
+    for (std::size_t i = 0; i < stroke.xs.size(); ++i) {
+        if (std::abs(stroke.xs[i] - edges[1]) < 1e-9) {
+            CHECK(stroke.values[i] == Approx(edges[1]));
+            found = true;
+            break;
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("uneven times still put samples in the column their time falls in",
+          "[levels][columns]")
+{
+    const std::vector<double> y{0.0, 1.0, 0.0, 2.0, 0.0};
+    const std::vector<double> t{0.0, 1.0, 2.0, 10.0, 11.0};
+    const gui::LinePyramid pyramid = gui::pyramidOf(y.data(), 5, 1);
+    gui::ColumnStroke stroke;
+    // Two columns: [0, 5.5) and [5.5, 11]. The spike at t=10 sits in the second.
+    REQUIRE(gui::rasterColumns(pyramid, y.data(), 5, t, 0.0, 11.0, 2, false, stroke));
+    CHECK(std::any_of(stroke.values.begin(), stroke.values.end(),
+                      [](double v) { return v == 2.0; }));
 }

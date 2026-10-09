@@ -293,6 +293,14 @@ public:
     /// read at the end of it rather than one per sixty-four pixels.
     Q_INVOKABLE void setPaneColumns(int columns);
 
+    /// One device pixel of the pane, in y units.
+    ///
+    /// The fold bends a chord that leaves the curve by more than this. Zero on
+    /// a logarithmic y, where a pixel is not a fixed value, and the chords stay
+    /// straight. A change refolds the runs already in hand: the pyramids are
+    /// not read again.
+    Q_INVOKABLE void setYPerPixel(double value);
+
     /// Hand every drawn line to `target` at once.
     ///
     /// One crossing rather than one per line, and no points built on the way:
@@ -518,6 +526,12 @@ private:
     ///
     /// False when any drawn line cannot answer, which leaves the whole run to
     /// the file: a run half in memory and half on disk would be two pictures.
+    /// Bend `values` onto the pyramid wherever a chord leaves it by more than a
+    /// pixel. No-op when there is no pixel, or when `positions` does not name
+    /// every value.
+    void bend(const LinePyramid& pyramid, std::vector<double>& values,
+              std::vector<double>& positions) const;
+
     [[nodiscard]] bool fillDetail(const PlotWindow& detail);
 
     // --- a logarithmic x axis ----------------------------------------------
@@ -591,9 +605,13 @@ private:
     /// `lines_` is, keyed as it is, and pruned and retired with it.
     struct LogFold
     {
-        /// The grid it was made on, and the axis it was made against.
+        /// Axis + pane + view this stroke was built for. `grid.columns` is no
+        /// longer the serve key — pixel columns of the axis are.
         LogFoldGrid grid;
-        /// The column edges in table positions, shared by every line.
+        double viewMin = 0.0;
+        double viewMax = 0.0;
+        bool armed = false;
+        /// Legacy log-column edges; unused by the column-stroke path.
         std::vector<double> edges;
         std::map<int, std::vector<double>> values;
         std::map<int, std::vector<double>> xs;
@@ -678,6 +696,8 @@ private:
     /// becomes an x -- the axis moving, the selection changing the budget --
     /// has to work out the window again from the same view.
     double viewMin_ = 0.0;
+    /// One device pixel of y, in the line's units. See setYPerPixel.
+    double yPerPixel_ = 0.0;
     double viewMax_ = 0.0;
     /// The runs in hand, one per resolution, in no particular order. Mutable
     /// because ensure() is const by Qt's contract and prunes every cache down

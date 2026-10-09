@@ -39,6 +39,7 @@
 #include "gui/PlotLevels.hpp"
 #include "gui/PlotProjection.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <span>
 #include <vector>
@@ -207,10 +208,11 @@ private:
 /// element index per value in `out`, in the same order, and cleared when the
 /// bucket is one because those values *are* the elements and the index is the
 /// step. With a base of one a summarised bucket is the two extremes after the
-/// crossing at each edge has joined them. A flank keeps the positions the
-/// extremes occurred at, so a straight line stays that line. A turn inside the
-/// bucket writes both at the column, and the stroke there is vertical. A
-/// crossing that lies between the extremes is not a third point. A coarser
+/// crossing at each edge has joined them, each at the position it occurred at.
+/// A crossing that lies between the extremes is not a third point. Standing a
+/// turn on the column centre instead made the stroke to the next column a
+/// triangle the width of the bucket, so a spike was drawn a bucket away from
+/// the sample it was until the next octave held that spike alone. A coarser
 /// base has no seam left to name, and the pair comes back at the positions the
 /// fold found. The positions are looked up from the levels already held, and
 /// the pyramid does not grow to remember them. Null leaves the fold as it was,
@@ -238,6 +240,15 @@ private:
 /// The pyramid is not grown and nothing is read.
 void followCurve(const LinePyramid& pyramid, std::vector<double>& values,
                  std::vector<double>& positions, double yTolerance, int budget);
+
+/// Samples `followCurve` may insert for a pane of `columns`.
+///
+/// A noisy line stops there and stays the envelope it already was. A curve
+/// that is a few chords never reaches it.
+[[nodiscard]] inline int curveBudget(int columns)
+{
+    return std::max(columns, 32) * 8;
+}
 
 /// Fold the whole line into about `buckets` buckets, as the whole-line summary.
 ///
@@ -319,8 +330,8 @@ struct ColumnFold
 /// column narrower than one element holds nothing and adds nothing. A column
 /// with nothing finite in it is one NaN, which is a gap.
 ///
-/// `out` is cleared first. A column that still has its samples is two values,
-/// both at the column: the extremes, the crossing at each edge included.
+/// `out` is cleared first. A column that still has its samples is the two
+/// extremes, the crossing at each edge included, each where it occurred.
 void foldColumns(const LinePyramid& pyramid, std::span<const double> edges, ColumnFold& out);
 
 } // namespace gui

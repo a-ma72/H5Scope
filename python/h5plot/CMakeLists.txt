@@ -38,6 +38,7 @@ add_library(h5plot SHARED
   "${H5SCOPE_SRC}/gui/PlotProjection.cpp"
   "${H5SCOPE_SRC}/gui/PlotLevels.cpp"
   "${H5SCOPE_SRC}/gui/PlotPyramid.cpp"
+  "${H5SCOPE_SRC}/gui/PlotColumns.cpp"
   "${H5SCOPE_SRC}/plotcore/LineStore.cpp"
   "${H5SCOPE_SRC}/plotcore/View.cpp"
   "${H5SCOPE_SRC}/plotcore/plotcore_c.cpp"

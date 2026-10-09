@@ -206,7 +206,8 @@ private:
     void retireBuffers(Entry& entry);
     void rebuildWhole(Entry& entry);
     void refreshCloser();
-    void refreshLogFold();
+    /// Fold every line onto the view's pixel columns (PlotColumns).
+    void refreshColumnStroke();
     void dropFolds();
     [[nodiscard]] double timeAt(const Entry& time, long long at) const;
     [[nodiscard]] bool timeEdges(const Entry& time, const LogColumns& columns,

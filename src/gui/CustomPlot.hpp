@@ -386,6 +386,11 @@ public:
     /// of it rather than one per sixty-four pixels.
     Q_INVOKABLE void setPaneColumns(int columns);
 
+    /// One device pixel of the pane, in y units. The plot tab's, for the plot
+    /// tab's reasons -- see DatasetPlot::setYPerPixel. PlotSurface drives
+    /// either one without knowing which it has.
+    Q_INVOKABLE void setYPerPixel(double value);
+
     /// Hand every drawn entry to `target` at once. See DatasetPlot::fill: one
     /// crossing, no points built on the way, and the values are **borrowed**.
     Q_INVOKABLE void fill(gui::PlotItem* target);
@@ -761,6 +766,12 @@ private:
     /// std::vector move takes the buffer with it, so the pointer the item holds
     /// goes on naming the same doubles.
     void retire(std::vector<double>& values) const;
+    /// Bend a fold onto its pyramid. See DatasetPlot::bend.
+    void bend(const LinePyramid& pyramid, std::vector<double>& values,
+              std::vector<double>& positions) const;
+    /// Refold `entry` from its pyramid at the current pixel, and drop a
+    /// logarithmic fold so the next draw builds it again.
+    void rebend(Entry& entry);
     /// Say that the lines changed. It does not touch the renderer: whatever it
     /// is drawing stays on the pane until the surface fills it again, which is
     /// a frame later and is a frame of the old picture rather than of none.
@@ -831,6 +842,9 @@ private:
     /// worked out with. See Entry::foldValues.
     mutable LogFoldGrid foldGrid_;
     mutable long long foldGeneration_ = 0;
+    mutable bool foldArmed_ = false;
+    mutable double foldViewMin_ = 0.0;
+    mutable double foldViewMax_ = 0.0;
     /// Whether the held time base runs one way, asked once per time base
     /// rather than once per fold: the answer is a walk of every element.
     mutable const double* sortedFor_ = nullptr;
@@ -852,6 +866,8 @@ private:
 
     /// The last range the surface pushed, in the x the axis prints.
     double viewMin_ = 0.0;
+    /// One device pixel of y, in the line's units. See setYPerPixel.
+    double yPerPixel_ = 0.0;
     double viewMax_ = 0.0;
     /// Columns the pane has, quantised, and the width the surface last pushed,
     /// waiting for the drag to stop. See PaneColumns.
