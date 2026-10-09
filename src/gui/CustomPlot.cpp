@@ -1188,16 +1188,19 @@ std::optional<LogColumns> CustomPlot::foldWanted() const
     else if (!std::isfinite(xStart_) || !std::isfinite(xStep_) || !(std::abs(xStep_) > 0.0)) {
         return {};
     }
-    // Engaged optional: column strokes cover linear and log. LogColumns value
-    // unused by the stroke path.
+    // Log under an octave: no column grid — closer runs take over.
+    if (xLog_) {
+        return logColumnsFor(viewMin_, viewMax_, bucketBudget());
+    }
+    // Linear: engaged sentinel; LinearColumns is built in remake.
     return LogColumns{};
 }
 
 bool CustomPlot::foldServes() const
 {
-    return foldArmed_ && foldGrid_.start == xStart_ && foldGrid_.step == xStep_ &&
-           foldGrid_.mode == static_cast<int>(xMode_) && foldGrid_.buckets == bucketBudget() &&
-           foldViewMin_ == viewMin_ && foldViewMax_ == viewMax_;
+    return foldArmed_ &&
+           foldGrid_.serves(xStart_, xStep_, static_cast<int>(xMode_), bucketBudget(), viewMin_,
+                            viewMax_);
 }
 
 void CustomPlot::dropFold() const
@@ -1253,22 +1256,39 @@ bool CustomPlot::foldedLine(const Entry& entry, PlotLine& line) const
         return false;
     }
     if (!foldServes()) {
-        // Another view. Every entry's fold goes with the one it was made on --
-        // retired rather than freed, because the renderer is drawing them
-        // until it is handed these.
+        // Another view past the held margin. Every entry's fold goes with the
+        // grid it was made on -- retired rather than freed, because the
+        // renderer is drawing them until it is handed these. A pan inside the
+        // margin keeps the stroke.
         dropFold();
-        foldGrid_.start = xStart_;
-        foldGrid_.step = xStep_;
-        foldGrid_.mode = static_cast<int>(xMode_);
-        foldGrid_.buckets = bucketBudget();
+        foldGrid_.remake(xStart_, xStep_, static_cast<int>(xMode_), bucketBudget(), viewMin_,
+                         viewMax_, xLog_);
         foldViewMin_ = viewMin_;
         foldViewMax_ = viewMax_;
-        foldArmed_ = true;
+        foldArmed_ = foldGrid_.columns.has_value() || foldGrid_.linear.has_value();
+        if (!foldArmed_) {
+            return false;
+        }
+    }
+    double foldMin = 0.0;
+    double foldMax = 0.0;
+    int foldColumns = 0;
+    if (!foldGrid_.extent(foldMin, foldMax, foldColumns)) {
+        return false;
     }
     if (entry.foldGeneration != foldGeneration_) {
         retire(entry.foldValues);
         retire(entry.foldXs);
         const double scale = stretchScale(entry);
+        // Raw when held at base 1, or when `values` is still the sample row
+        // (short line, stride 1). Summarised `values` must not be passed as raw.
+        const double* raw =
+            rawSamples(entry.pyramid,
+                       (!entry.summarised &&
+                        static_cast<long long>(entry.values.size()) == entry.pyramid.length)
+                           ? entry.values.data()
+                           : nullptr,
+                       entry.pyramid.length);
         ColumnStroke stroke;
         bool ok = false;
         if (xMode_ == Dataset) {
@@ -1276,16 +1296,16 @@ bool CustomPlot::foldedLine(const Entry& entry, PlotLine& line) const
             std::span<const double> times;
             if (!axis_.pyramid.empty() && axis_.pyramid.baseBucket() == 1) {
                 times = axis_.pyramid.levels.front().values;
-            } else if (!axis_.values.empty()) {
+            } else if (!axis_.values.empty() && !axis_.summarised) {
                 times = axis_.values;
             }
             if (!times.empty() && static_cast<long long>(times.size()) == entry.pyramid.length) {
-                ok = rasterColumns(entry.pyramid, nullptr, entry.pyramid.length, times, 0.0, 1.0,
-                                   viewMin_, viewMax_, bucketBudget(), xLog_, stroke);
+                ok = rasterColumns(entry.pyramid, raw, entry.pyramid.length, times, 0.0, 1.0,
+                                   foldMin, foldMax, foldColumns, xLog_, stroke);
             }
         } else {
-            ok = rasterColumns(entry.pyramid, nullptr, entry.pyramid.length, {}, xStart_,
-                               xStep_ * scale, viewMin_, viewMax_, bucketBudget(), xLog_, stroke);
+            ok = rasterColumns(entry.pyramid, raw, entry.pyramid.length, {}, xStart_,
+                               xStep_ * scale, foldMin, foldMax, foldColumns, xLog_, stroke);
         }
         if (!ok) {
             entry.foldGeneration = -1;

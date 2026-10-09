@@ -1235,8 +1235,9 @@ TEST_CASE("a log fold's grid serves the axis it was made on and no other", "[lev
     gui::LogFoldGrid grid;
     CHECK_FALSE(grid.serves(0.0, 1.0, 0, 1024, 1.0, 1e6));
 
-    grid.remake(0.0, 1.0, 0, 1024, 1.0, 1e6);
+    grid.remake(0.0, 1.0, 0, 1024, 1.0, 1e6, true);
     REQUIRE(grid.columns.has_value());
+    CHECK_FALSE(grid.linear.has_value());
     CHECK(grid.serves(0.0, 1.0, 0, 1024, 1.0, 1e6));
     // A pan inside the margin is the same grid.
     CHECK(grid.serves(0.0, 1.0, 0, 1024, 2.0, 2e6));
@@ -1248,13 +1249,36 @@ TEST_CASE("a log fold's grid serves the axis it was made on and no other", "[lev
     CHECK_FALSE(grid.serves(0.0, 1.0, 0, 512, 1.0, 1e6));
 
     // Under an octave there is no grid at all.
-    grid.remake(0.0, 1.0, 0, 1024, 10.0, 15.0);
+    grid.remake(0.0, 1.0, 0, 1024, 10.0, 15.0, true);
     CHECK_FALSE(grid.columns.has_value());
     CHECK_FALSE(grid.serves(0.0, 1.0, 0, 1024, 10.0, 15.0));
 
-    grid.remake(0.0, 1.0, 0, 1024, 1.0, 1e6);
+    grid.remake(0.0, 1.0, 0, 1024, 1.0, 1e6, true);
     grid.clear();
     CHECK_FALSE(grid.serves(0.0, 1.0, 0, 1024, 1.0, 1e6));
+}
+
+TEST_CASE("a linear fold's grid serves a pan inside its margin", "[levels][fold][columns]")
+{
+    gui::LogFoldGrid grid;
+    grid.remake(0.0, 1.0, 0, 100, 1000.0, 2000.0, false);
+    REQUIRE(grid.linear.has_value());
+    CHECK_FALSE(grid.columns.has_value());
+    CHECK(grid.serves(0.0, 1.0, 0, 100, 1000.0, 2000.0));
+    // Half a pane of margin: a pan of a quarter pane still serves.
+    CHECK(grid.serves(0.0, 1.0, 0, 100, 1250.0, 2250.0));
+    // A zoom changes the pitch.
+    CHECK_FALSE(grid.serves(0.0, 1.0, 0, 100, 1000.0, 1500.0));
+    // Past the margin needs another fold.
+    CHECK_FALSE(grid.serves(0.0, 1.0, 0, 100, 2000.0, 3000.0));
+
+    double x0 = 0.0;
+    double x1 = 0.0;
+    int cols = 0;
+    REQUIRE(grid.extent(x0, x1, cols));
+    CHECK(cols > 100); // margin widens the held run
+    CHECK(x0 < 1000.0);
+    CHECK(x1 > 2000.0);
 }
 
 TEST_CASE("a pyramid is coarsened to a smaller budget and refuses a larger one",

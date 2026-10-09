@@ -46,6 +46,22 @@ void columnEdges(double xMin, double xMax, int columns, bool xLog, std::vector<d
 /// Which column of `edges` holds `x`, or -1 when outside `[edges.front(), edges.back())`.
 [[nodiscard]] int columnOf(std::span<const double> edges, double x);
 
+/// Sample row for `rasterColumns` when the caller has one, else the pyramid's
+/// base-1 level, else null (pyramid-only path via `extremesOver`).
+[[nodiscard]] inline const double* rawSamples(const LinePyramid& pyramid, const double* held,
+                                              long long count)
+{
+    if (held != nullptr && count > 0 &&
+        (pyramid.empty() || count == pyramid.length)) {
+        return held;
+    }
+    if (!pyramid.empty() && pyramid.baseBucket() == 1 &&
+        static_cast<long long>(pyramid.levels.front().values.size()) >= pyramid.length) {
+        return pyramid.levels.front().values.data();
+    }
+    return nullptr;
+}
+
 /// Raster one line onto the view's pixel columns.
 ///
 /// Per column: the sample index range from the edges (arithmetic on an index

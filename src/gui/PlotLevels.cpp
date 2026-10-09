@@ -433,21 +433,88 @@ bool logColumnsServe(const LogColumns& held, double low, double high, int column
     return wanted.has_value() && wanted->density == held.density && held.covers(low, high);
 }
 
+std::optional<LinearColumns> linearColumnsFor(double low, double high, int columns)
+{
+    if (columns <= 0 || !(high > low) || !std::isfinite(low) || !std::isfinite(high)) {
+        return {};
+    }
+    const double span = high - low;
+    const double width = span / static_cast<double>(columns);
+    if (!(width > 0.0) || !std::isfinite(width)) {
+        return {};
+    }
+    const double margin = span / 2.0;
+    LinearColumns grid;
+    grid.width = width;
+    grid.first = static_cast<long long>(std::floor((low - margin) / width));
+    grid.last = static_cast<long long>(std::ceil((high + margin) / width));
+    if (grid.last <= grid.first) {
+        return {};
+    }
+    return grid;
+}
+
+bool linearColumnsServe(const LinearColumns& held, double low, double high, int columns)
+{
+    const std::optional<LinearColumns> wanted = linearColumnsFor(low, high, columns);
+    if (!wanted.has_value() || !(held.width > 0.0)) {
+        return false;
+    }
+    // Same pitch (same zoom). Relative epsilon so a far-from-zero window of
+    // large width still matches after the arithmetic that remade `wanted`.
+    const double scale = std::max(held.width, 1.0);
+    if (std::abs(wanted->width - held.width) > 1e-12 * scale) {
+        return false;
+    }
+    return held.covers(low, high);
+}
+
 bool LogFoldGrid::serves(double atStart, double atStep, int atMode, int atBuckets, double low,
                          double high) const
 {
-    return columns.has_value() && start == atStart && step == atStep && mode == atMode &&
-           buckets == atBuckets && logColumnsServe(*columns, low, high, atBuckets);
+    if (start != atStart || step != atStep || mode != atMode || buckets != atBuckets) {
+        return false;
+    }
+    if (columns.has_value()) {
+        return logColumnsServe(*columns, low, high, atBuckets);
+    }
+    if (linear.has_value()) {
+        return linearColumnsServe(*linear, low, high, atBuckets);
+    }
+    return false;
 }
 
 void LogFoldGrid::remake(double atStart, double atStep, int atMode, int atBuckets, double low,
-                         double high)
+                         double high, bool xLog)
 {
-    columns = logColumnsFor(low, high, atBuckets);
     start = atStart;
     step = atStep;
     mode = atMode;
     buckets = atBuckets;
+    if (xLog) {
+        columns = logColumnsFor(low, high, atBuckets);
+        linear.reset();
+    } else {
+        linear = linearColumnsFor(low, high, atBuckets);
+        columns.reset();
+    }
+}
+
+bool LogFoldGrid::extent(double& xMin, double& xMax, int& columnCount) const
+{
+    if (columns.has_value() && columns->columnCount() > 0) {
+        xMin = columns->edge(columns->first);
+        xMax = columns->edge(columns->last);
+        columnCount = columns->columnCount();
+        return xMax > xMin;
+    }
+    if (linear.has_value() && linear->columnCount() > 0) {
+        xMin = linear->edge(linear->first);
+        xMax = linear->edge(linear->last);
+        columnCount = linear->columnCount();
+        return xMax > xMin;
+    }
+    return false;
 }
 
 void edgesAlong(const LogColumns& columns, double start, double step, std::vector<double>& out)

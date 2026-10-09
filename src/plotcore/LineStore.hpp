@@ -238,6 +238,9 @@ private:
     double askedMin_ = 0.0;
     double askedMax_ = 1.0;
     bool asked_ = false;
+    /// Column-stroke grid covering askedMin_..askedMax_ with margin. A pan
+    /// inside that margin keeps every entry's foldValid stroke.
+    LogFoldGrid foldGrid_;
     long long length_ = 0;
     double minimum_ = 0.0;
     double maximum_ = 1.0;

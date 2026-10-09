@@ -588,17 +588,18 @@ private:
     double xStep_ = 1.0;
     bool xLog_ = false;
 
-    /// Every drawn line folded onto a logarithmic axis's columns. See
-    /// LogColumns.
+    /// Every drawn line folded onto the pane's pixel columns. See
+    /// LogColumns / LinearColumns and PlotColumns.
     ///
     /// Beside the whole-line summary and the runs rather than instead of
-    /// them, because it answers only for a view spanning an octave or more:
-    /// zoomed in past that, the runs are what is drawn and what reads below
-    /// the pyramid's base. Both maps are borrowed by the renderer on the terms
-    /// `lines_` is, keyed as it is, and pruned and retired with it.
+    /// them. On a log axis it answers only for a view spanning an octave or
+    /// more; under that, the runs are what is drawn. The held grid covers the
+    /// view plus a half-pane margin so a pan inside that margin keeps the
+    /// stroke. Both maps are borrowed by the renderer on the terms `lines_`
+    /// is, keyed as it is, and pruned and retired with it.
     struct LogFold
     {
-        /// Axis + pane + view this stroke was built for.
+        /// Axis + pane + column grid this stroke was built for.
         LogFoldGrid grid;
         double viewMin = 0.0;
         double viewMax = 0.0;

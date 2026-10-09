@@ -566,11 +566,10 @@ void LineStore::setVisibleRange(double xMin, double xMax)
     asked_ = true;
     askedMin_ = askedMin;
     askedMax_ = askedMax;
-    dropFolds();
+    // Column strokes drop only when the held grid no longer serves the asked
+    // window (zoom, or pan past the margin). refreshColumnStroke decides.
     refreshCloser();
     refreshColumnStroke();
-    // The view moved: column strokes are rebuilt even when a held closer window
-    // still covers the same index run (a pan inside one octave).
     emitChanged();
 }
 
@@ -900,6 +899,7 @@ void LineStore::dropFolds()
         entry.foldValid = false;
         entry.foldSummarised = false;
     }
+    foldGrid_.clear();
 }
 
 double LineStore::timeAt(const Entry& time, long long at) const
@@ -928,7 +928,20 @@ void LineStore::refreshColumnStroke()
         x0 = xMin();
         x1 = xMax();
     }
-    if (!(x1 > x0) || !std::isfinite(x0) || !std::isfinite(x1)) {
+    if (!(x1 > x0) || !std::isfinite(x0) || !std::isfinite(x1) || columns_ < 1) {
+        return;
+    }
+
+    // Index axis for LineStore strokes: start 0, step 1 (or times). Mode 0.
+    constexpr int kMode = 0;
+    if (!foldGrid_.serves(0.0, 1.0, kMode, columns_, x0, x1)) {
+        dropFolds();
+        foldGrid_.remake(0.0, 1.0, kMode, columns_, x0, x1, xLog_);
+    }
+    double foldMin = 0.0;
+    double foldMax = 0.0;
+    int foldColumns = 0;
+    if (!foldGrid_.extent(foldMin, foldMax, foldColumns)) {
         return;
     }
 
@@ -945,9 +958,11 @@ void LineStore::refreshColumnStroke()
             times = std::span<const double>(axis_.values, static_cast<std::size_t>(axis_.count));
         }
 
+        const double* raw =
+            rawSamples(entry.pyramid, entry.values, static_cast<long long>(entry.count));
         ColumnStroke stroke;
-        if (!rasterColumns(entry.pyramid, entry.values, static_cast<long long>(entry.count), times,
-                           x0, x1, columns_, xLog_, stroke)) {
+        if (!rasterColumns(entry.pyramid, raw, static_cast<long long>(entry.count), times, foldMin,
+                           foldMax, foldColumns, xLog_, stroke)) {
             continue;
         }
         entry.foldValues = std::move(stroke.values);
