@@ -457,13 +457,15 @@ std::optional<LinearColumns> linearColumnsFor(double low, double high, int colum
 bool linearColumnsServe(const LinearColumns& held, double low, double high, int columns)
 {
     const std::optional<LinearColumns> wanted = linearColumnsFor(low, high, columns);
-    if (!wanted.has_value() || !(held.width > 0.0)) {
+    if (!wanted.has_value() || !(held.width > 0.0) || !(wanted->width > 0.0)) {
         return false;
     }
-    // Same pitch (same zoom). Relative epsilon so a far-from-zero window of
-    // large width still matches after the arithmetic that remade `wanted`.
-    const double scale = std::max(held.width, 1.0);
-    if (std::abs(wanted->width - held.width) > 1e-12 * scale) {
+    // One octave of pitch, matching LogColumns' density steps: zooming by less
+    // than 2× keeps the stroke (a little coarser or finer than the pane asks)
+    // so a wheel at a wide view is not a refold per tick.
+    const double lo = std::min(held.width, wanted->width);
+    const double hi = std::max(held.width, wanted->width);
+    if (hi > lo * 2.0) {
         return false;
     }
     return held.covers(low, high);

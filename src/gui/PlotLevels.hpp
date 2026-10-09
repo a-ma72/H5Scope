@@ -479,8 +479,10 @@ struct LogColumns
 /// each column holds.
 ///
 /// Edge `k` sits at `k * width`. Half a pane of margin either side: a pan can
-/// go half a pane before another fold, and a zoom that changes the pitch
-/// remakes the grid.
+/// go half a pane before another fold, and a zoom stays on this grid until the
+/// pitch it wants moves by more than a factor of two — the linear twin of
+/// LogColumns stepping density by octaves. Refolding on every wheel tick at
+/// a wide view was the cost a reader felt as sluggish zooming.
 struct LinearColumns
 {
     double width = 0.0;

@@ -1268,8 +1268,12 @@ TEST_CASE("a linear fold's grid serves a pan inside its margin", "[levels][fold]
     CHECK(grid.serves(0.0, 1.0, 0, 100, 1000.0, 2000.0));
     // Half a pane of margin: a pan of a quarter pane still serves.
     CHECK(grid.serves(0.0, 1.0, 0, 100, 1250.0, 2250.0));
-    // A zoom changes the pitch.
-    CHECK_FALSE(grid.serves(0.0, 1.0, 0, 100, 1000.0, 1500.0));
+    // A modest zoom stays inside one octave of pitch.
+    CHECK(grid.serves(0.0, 1.0, 0, 100, 1000.0, 1800.0));
+    // A 2× zoom asks for half the width — still the octave boundary.
+    CHECK(grid.serves(0.0, 1.0, 0, 100, 1000.0, 1500.0));
+    // Past a factor of two remakes.
+    CHECK_FALSE(grid.serves(0.0, 1.0, 0, 100, 1000.0, 1400.0));
     // Past the margin needs another fold.
     CHECK_FALSE(grid.serves(0.0, 1.0, 0, 100, 2000.0, 3000.0));
 
