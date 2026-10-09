@@ -295,10 +295,8 @@ public:
 
     /// One device pixel of the pane, in y units.
     ///
-    /// The fold bends a chord that leaves the curve by more than this. Zero on
-    /// a logarithmic y, where a pixel is not a fixed value, and the chords stay
-    /// straight. A change refolds the runs already in hand: the pyramids are
-    /// not read again.
+    /// Retained for the QML/C API. Drawing uses PlotColumns entry/exit
+    /// geometry rather than a chord tolerance.
     Q_INVOKABLE void setYPerPixel(double value);
 
     /// Hand every drawn line to `target` at once.
@@ -527,11 +525,6 @@ private:
     /// False when any drawn line cannot answer, which leaves the whole run to
     /// the file: a run half in memory and half on disk would be two pictures.
     /// Bend `values` onto the pyramid wherever a chord leaves it by more than a
-    /// pixel. No-op when there is no pixel, or when `positions` does not name
-    /// every value.
-    void bend(const LinePyramid& pyramid, std::vector<double>& values,
-              std::vector<double>& positions) const;
-
     [[nodiscard]] bool fillDetail(const PlotWindow& detail);
 
     // --- a logarithmic x axis ----------------------------------------------
@@ -605,14 +598,11 @@ private:
     /// `lines_` is, keyed as it is, and pruned and retired with it.
     struct LogFold
     {
-        /// Axis + pane + view this stroke was built for. `grid.columns` is no
-        /// longer the serve key — pixel columns of the axis are.
+        /// Axis + pane + view this stroke was built for.
         LogFoldGrid grid;
         double viewMin = 0.0;
         double viewMax = 0.0;
         bool armed = false;
-        /// Legacy log-column edges; unused by the column-stroke path.
-        std::vector<double> edges;
         std::map<int, std::vector<double>> values;
         std::map<int, std::vector<double>> xs;
         std::map<int, bool> summarised;

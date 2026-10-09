@@ -163,6 +163,30 @@ bool rasterColumns(const LinePyramid& pyramid, const double* raw, long long coun
 
     const double* row = rawRow(pyramid, raw, count);
 
+    // Restrict the walk to samples that can meet the view (plus one either
+    // side for entry/exit). A full scan of a hundred-million-element line on
+    // every pan would be the cost the pyramid exists to avoid.
+    long long walkFirst = 0;
+    long long walkLast = count;
+    if (!times.empty()) {
+        const auto begin = times.begin();
+        const auto end = times.end();
+        walkFirst = static_cast<long long>(std::lower_bound(begin, end, edges.front()) - begin);
+        walkLast = static_cast<long long>(std::upper_bound(begin, end, edges.back()) - begin);
+    } else {
+        const double lo = (edges.front() - indexStart) / indexStep;
+        const double hi = (edges.back() - indexStart) / indexStep;
+        double a = lo;
+        double b = hi;
+        if (indexStep < 0.0) {
+            std::swap(a, b);
+        }
+        walkFirst = static_cast<long long>(std::floor(a));
+        walkLast = static_cast<long long>(std::floor(b)) + 1;
+    }
+    walkFirst = std::clamp(walkFirst - 1, 0LL, count);
+    walkLast = std::clamp(walkLast + 1, 0LL, count);
+
     struct ColumnInfo
     {
         long long first = -1;
@@ -172,8 +196,8 @@ bool rasterColumns(const LinePyramid& pyramid, const double* raw, long long coun
     };
     std::vector<ColumnInfo> cols(static_cast<std::size_t>(columns));
 
-    // Walk every sample once. O(n + columns).
-    for (long long i = 0; i < count; ++i) {
+    // Walk the in-view run once. O(visible samples + columns).
+    for (long long i = walkFirst; i < walkLast; ++i) {
         const double x = sampleX(times, i, indexStart, indexStep);
         if (!std::isfinite(x)) {
             continue;

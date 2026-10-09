@@ -1,4 +1,6 @@
 h5plot.dll
+h5plot.dll.old*
+h5plot.dll.prev
 libh5plot.dll
 libh5plot.dll.a
 h5plot.dll.a

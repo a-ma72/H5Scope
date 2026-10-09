@@ -466,9 +466,8 @@ namespace {
 /// Each extreme keeps the position it occurred at. Standing a turn on the
 /// column centre made the bar vertical there, and the stroke from that bar to
 /// the next column was a triangle the width of the bucket: the spike drawn a
-/// bucket away from the sample, until the next octave made the bucket narrow
-/// enough to hold the spike alone. The chord between the true positions is
-/// what `followCurve` bends back onto the samples.
+/// bucket away from the sample. Pixel-column strokes (PlotColumns) place entry
+/// and exit from those true positions instead.
 void placeColumn(double& y0, double& y1, double& x0, double& x1, double columnAt,
                  const double* raw, long long rawCount, double leftEdge, double rightEdge)
 {
@@ -695,134 +694,12 @@ void placeOnColumns(const LinePyramid& pyramid, long long bucket, long long firs
     return true;
 }
 
-struct Bend
-{
-    long long index = -1;
-    double value = 0.0;
-    double error = 0.0;
-};
-
-/// The extreme of a finer level furthest off the line from `(i0, y0)` to `(i1, y1)`.
-///
-/// A handful of buckets, not the samples between the two ends. The point
-/// farthest from a straight line is an extreme of one of those buckets, and
-/// `locateSlot` names the sample. Eight buckets is the most one call looks at:
-/// coarser than that and the next call, on the piece that was actually bent,
-/// opens the level below.
-[[nodiscard]] Bend farthestBend(const LinePyramid& pyramid, double i0, double y0, double i1,
-                                double y1)
-{
-    Bend best;
-    const double span = i1 - i0;
-    if (!(span > 1.0) || !std::isfinite(y0) || !std::isfinite(y1)) {
-        return best;
-    }
-    int chosen = -1;
-    for (std::size_t i = 0; i < pyramid.levels.size(); ++i) {
-        const long long bucket = pyramid.levels[i].bucket;
-        if (bucket >= span) {
-            break;
-        }
-        // Finest level that still covers the gap in eight buckets or fewer.
-        // Finer than that is a scan, which is what this exists not to be.
-        if (span / static_cast<double>(bucket) > 8.0) {
-            continue;
-        }
-        chosen = static_cast<int>(i);
-        break;
-    }
-    if (chosen < 0) {
-        return best;
-    }
-    const PyramidLevel& level = pyramid.levels[static_cast<std::size_t>(chosen)];
-    const auto offer = [&](long long index, double value) {
-        if (index <= i0 || index >= i1 || !std::isfinite(value)) {
-            return;
-        }
-        const double on = y0 + (static_cast<double>(index) - i0) / span * (y1 - y0);
-        const double error = std::abs(value - on);
-        if (error > best.error) {
-            best.error = error;
-            best.index = index;
-            best.value = value;
-        }
-    };
-    if (level.bucket == 1) {
-        const auto from = static_cast<long long>(std::floor(i0)) + 1;
-        const auto to = std::min(static_cast<long long>(std::ceil(i1)), pyramid.length);
-        for (long long k = std::max<long long>(from, 0); k < to; ++k) {
-            offer(k, level.values[static_cast<std::size_t>(k)]);
-        }
-        return best;
-    }
-    const long long firstBucket = std::max<long long>(static_cast<long long>(std::floor(i0)) / level.bucket, 0);
-    const long long lastBucket = std::min((static_cast<long long>(std::ceil(i1)) + level.bucket - 1) / level.bucket,
-                                          level.buckets());
-    for (long long b = firstBucket; b < lastBucket; ++b) {
-        const double* pair = level.values.data() + static_cast<std::size_t>(b) * 2;
-        offer(locateSlot(pyramid, chosen, b, 0), pair[0]);
-        offer(locateSlot(pyramid, chosen, b, 1), pair[1]);
-    }
-    return best;
-}
-
-void bendBetween(const LinePyramid& pyramid, double i0, double y0, double i1, double y1,
-                 double yTolerance, int& budget, int depth, std::vector<double>& outValues,
-                 std::vector<double>& outPositions)
-{
-    // Depth bounds the chain that peels one sample at a time. A sine splits
-    // near the middle and never gets here; noise would, and the stack is not
-    // the place to hold a line.
-    if (budget <= 0 || depth > 32 || !(i1 > i0 + 1.0)) {
-        return;
-    }
-    const Bend worst = farthestBend(pyramid, i0, y0, i1, y1);
-    if (worst.index < 0 || !(worst.error > yTolerance)) {
-        return;
-    }
-    --budget;
-    bendBetween(pyramid, i0, y0, static_cast<double>(worst.index), worst.value, yTolerance, budget,
-                depth + 1, outValues, outPositions);
-    outValues.push_back(worst.value);
-    outPositions.push_back(static_cast<double>(worst.index));
-    bendBetween(pyramid, static_cast<double>(worst.index), worst.value, i1, y1, yTolerance, budget,
-                depth + 1, outValues, outPositions);
-}
-
 } // namespace
 
 bool fillWindow(const LinePyramid& pyramid, const PlotWindow& window, std::vector<double>& out,
                 std::vector<double>* positions)
 {
     return foldRun(pyramid, window.first, window.span, window.bucket, out, positions);
-}
-
-void followCurve(const LinePyramid& pyramid, std::vector<double>& values,
-                 std::vector<double>& positions, double yTolerance, int budget)
-{
-    if (!(yTolerance > 0.0) || budget <= 0 || pyramid.empty() || values.size() < 2 ||
-        values.size() != positions.size()) {
-        return;
-    }
-    std::vector<double> outValues;
-    std::vector<double> outPositions;
-    outValues.reserve(values.size() + static_cast<std::size_t>(budget));
-    outPositions.reserve(outValues.capacity());
-    outValues.push_back(values.front());
-    outPositions.push_back(positions.front());
-    for (std::size_t i = 1; i < values.size(); ++i) {
-        const double i0 = outPositions.back();
-        const double y0 = outValues.back();
-        const double i1 = positions[i];
-        const double y1 = values[i];
-        if (budget > 0 && std::isfinite(y0) && std::isfinite(y1) && i1 > i0 + 1.0) {
-            bendBetween(pyramid, i0, y0, i1, y1, yTolerance, budget, 0, outValues, outPositions);
-        }
-        outValues.push_back(y1);
-        outPositions.push_back(i1);
-    }
-    values.swap(outValues);
-    positions.swap(outPositions);
 }
 
 bool fillWhole(const LinePyramid& pyramid, int buckets, std::vector<double>& out, long long& stride,

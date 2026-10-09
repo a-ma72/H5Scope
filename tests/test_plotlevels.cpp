@@ -794,106 +794,51 @@ TEST_CASE("a column is the two extremes, the crossing at each edge included",
     CHECK(positions[3] == 12.0);
 }
 
-TEST_CASE("a spike inside a bucket stays at its sample once the chord is bent",
-          "[levels][pyramid]")
+TEST_CASE("a spike inside a coarse column keeps its sample x on the stroke",
+          "[levels][columns]")
 {
-    // Both extremes used to stand on the column centre. The stroke from that
-    // bar to the next column was a triangle the width of the bucket, and the
-    // spike was drawn a bucket away from the sample it was. The next octave
-    // in was the first picture that held the spike in a bucket of its own.
+    // Extrema at true sample x, not column centre — so a spike is not drawn a
+    // bucket wide as a triangle to the next column.
     constexpr long long kCount = 128;
     std::vector<double> line(static_cast<std::size_t>(kCount), 0.0);
     line[40] = 100.0;
     line[90] = -40.0;
     const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), kCount, 1);
-    std::vector<double> values;
-    std::vector<double> positions;
-    REQUIRE(gui::fillWindow(pyramid, gui::PlotWindow{0, kCount, 64, 2}, values, &positions));
-    REQUIRE(positions.size() == values.size());
+    gui::ColumnStroke stroke;
+    REQUIRE(gui::rasterColumns(pyramid, line.data(), kCount, {}, 0.0,
+                               static_cast<double>(kCount - 1), 4, false, stroke));
+    REQUIRE(stroke.xs.size() == stroke.values.size());
     bool peak = false;
     bool trough = false;
-    for (std::size_t i = 0; i < values.size(); ++i) {
-        if (values[i] == 100.0) {
-            CHECK(positions[i] == 40.0);
+    for (std::size_t i = 0; i < stroke.values.size(); ++i) {
+        if (stroke.values[i] == 100.0) {
+            CHECK(stroke.xs[i] == Approx(40.0));
             peak = true;
         }
-        if (values[i] == -40.0) {
-            CHECK(positions[i] == 90.0);
+        if (stroke.values[i] == -40.0) {
+            CHECK(stroke.xs[i] == Approx(90.0));
             trough = true;
         }
     }
     CHECK(peak);
     CHECK(trough);
-
-    const double tolerance = 1.0;
-    gui::followCurve(pyramid, values, positions, tolerance, gui::curveBudget(64));
-    REQUIRE(positions.size() == values.size());
-    REQUIRE(std::is_sorted(positions.begin(), positions.end()));
-    peak = false;
-    for (std::size_t i = 0; i < values.size(); ++i) {
-        if (values[i] == 100.0 && positions[i] == 40.0) {
-            peak = true;
-        }
-    }
-    CHECK(peak);
-    double worst = 0.0;
-    for (std::size_t i = 1; i < positions.size(); ++i) {
-        const double i0 = positions[i - 1];
-        const double i1 = positions[i];
-        const double y0 = values[i - 1];
-        const double y1 = values[i];
-        if (!(i1 > i0)) {
-            continue;
-        }
-        for (long long k = static_cast<long long>(std::floor(i0)) + 1;
-             k < static_cast<long long>(std::ceil(i1)); ++k) {
-            if (k < 0 || k >= kCount) {
-                continue;
-            }
-            const double on = y0 + (static_cast<double>(k) - i0) / (i1 - i0) * (y1 - y0);
-            worst = std::max(worst, std::abs(line[static_cast<std::size_t>(k)] - on));
-        }
-    }
-    CHECK(worst <= tolerance);
 }
 
-TEST_CASE("a chord that leaves the curve gains the sample it missed", "[levels][pyramid]")
+TEST_CASE("zooming from many samples per column to one keeps the spike", "[levels][columns]")
 {
-    // A quarter of a sine, one rising flank. The extremes sit at the two ends,
-    // so the stroke is the chord between them, and a miss of a fifth of the
-    // amplitude brings the flank back. The ends themselves stay.
     constexpr long long kCount = 4000;
-    std::vector<double> line(static_cast<std::size_t>(kCount));
-    for (long long i = 0; i < kCount; ++i) {
-        line[static_cast<std::size_t>(i)] = std::sin(2.0 * 3.14159265358979323846 * i / kCount);
-    }
+    std::vector<double> line(static_cast<std::size_t>(kCount), 0.0);
+    line[2000] = 9.0;
     const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), kCount, 1);
-    std::vector<double> values;
-    std::vector<double> positions;
-    REQUIRE(gui::fillWindow(pyramid, gui::PlotWindow{0, 1000, 1024, 1}, values, &positions));
-    REQUIRE(values.size() == 2);
-    REQUIRE(positions[1] > positions[0]);
-    const double missed = 0.2;
-    gui::followCurve(pyramid, values, positions, missed, 64);
-    REQUIRE(values.size() > 2);
-    REQUIRE(positions.size() == values.size());
-    CHECK(positions.front() == 0.0);
-    CHECK(values.back() == Approx(1.0));
-    double worst = 0.0;
-    for (std::size_t i = 1; i < positions.size(); ++i) {
-        const double i0 = positions[i - 1];
-        const double i1 = positions[i];
-        const double y0 = values[i - 1];
-        const double y1 = values[i];
-        if (!(i1 > i0)) {
-            continue;
-        }
-        for (long long k = static_cast<long long>(i0) + 1; k < static_cast<long long>(i1); ++k) {
-            const double on = y0 + (static_cast<double>(k) - i0) / (i1 - i0) * (y1 - y0);
-            worst = std::max(worst, std::abs(line[static_cast<std::size_t>(k)] - on));
-        }
-    }
-    CHECK(worst <= missed);
+    gui::ColumnStroke wide;
+    REQUIRE(gui::rasterColumns(pyramid, line.data(), kCount, {}, 0.0, 3999.0, 64, false, wide));
+    CHECK(std::any_of(wide.values.begin(), wide.values.end(),
+                      [](double y) { return y == 9.0; }));
+    gui::ColumnStroke close;
+    REQUIRE(gui::rasterColumns(pyramid, line.data(), kCount, {}, 1980.0, 2020.0, 64, false, close));
+    CHECK_FALSE(close.summarised);
+    CHECK(std::any_of(close.values.begin(), close.values.end(),
+                      [](double y) { return y == 9.0; }));
 }
 
 namespace {

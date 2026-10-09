@@ -386,9 +386,11 @@ public:
     /// of it rather than one per sixty-four pixels.
     Q_INVOKABLE void setPaneColumns(int columns);
 
-    /// One device pixel of the pane, in y units. The plot tab's, for the plot
-    /// tab's reasons -- see DatasetPlot::setYPerPixel. PlotSurface drives
-    /// either one without knowing which it has.
+    /// One device pixel of the pane, in y units.
+    ///
+    /// Retained for the QML/C API. Drawing uses PlotColumns entry/exit
+    /// geometry rather than a chord tolerance. PlotSurface drives either plot
+    /// without knowing which it has.
     Q_INVOKABLE void setYPerPixel(double value);
 
     /// Hand every drawn entry to `target` at once. See DatasetPlot::fill: one
@@ -642,9 +644,6 @@ private:
     [[nodiscard]] double timeAt(long long at) const;
     /// Whether the time base, as held, runs one way; and which.
     [[nodiscard]] bool timeSorted(bool& ascending) const;
-    /// The edges of `columns` as positions of an entry scaled by `scale`
-    /// against the time base, ascending.
-    void timeEdges(const LogColumns& columns, double scale, std::vector<double>& out) const;
     /// Work out where the view and the focus fall in axis positions, once, for
     /// every entry to divide by its own scaling.
     ///
@@ -766,12 +765,6 @@ private:
     /// std::vector move takes the buffer with it, so the pointer the item holds
     /// goes on naming the same doubles.
     void retire(std::vector<double>& values) const;
-    /// Bend a fold onto its pyramid. See DatasetPlot::bend.
-    void bend(const LinePyramid& pyramid, std::vector<double>& values,
-              std::vector<double>& positions) const;
-    /// Refold `entry` from its pyramid at the current pixel, and drop a
-    /// logarithmic fold so the next draw builds it again.
-    void rebend(Entry& entry);
     /// Say that the lines changed. It does not touch the renderer: whatever it
     /// is drawing stays on the pane until the surface fills it again, which is
     /// a frame later and is a frame of the old picture rather than of none.

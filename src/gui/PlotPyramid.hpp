@@ -221,35 +221,6 @@ private:
                               std::vector<double>& out,
                               std::vector<double>* positions = nullptr);
 
-/// Where the straight line between the extremes leaves the curve, add the sample.
-///
-/// A bucket keeps its smallest and its largest, and the stroke between them is
-/// a straight line. On a sine whose period is a few buckets that line *is* the
-/// flank, and the wave is drawn as a triangle with the right peaks in the
-/// right places. The samples that would have bent it are still in the pyramid.
-///
-/// `yTolerance` is one pixel, in the line's own units. Between each pair already
-/// in `values`, the finer levels are asked which of their extremes sits
-/// furthest off that line. Farther than a pixel, it is inserted and both
-/// pieces are asked again. A run the line already fits, and a segment with
-/// nothing between its ends, stay as they are. `budget` caps how many points
-/// may be added, so a noisy line stays a pane rather than becoming the file.
-/// The extremes passed in are kept, which is what still catches a spike.
-///
-/// No-op unless `yTolerance` is positive and `positions` names every value.
-/// The pyramid is not grown and nothing is read.
-void followCurve(const LinePyramid& pyramid, std::vector<double>& values,
-                 std::vector<double>& positions, double yTolerance, int budget);
-
-/// Samples `followCurve` may insert for a pane of `columns`.
-///
-/// A noisy line stops there and stays the envelope it already was. A curve
-/// that is a few chords never reaches it.
-[[nodiscard]] inline int curveBudget(int columns)
-{
-    return std::max(columns, 32) * 8;
-}
-
 /// Fold the whole line into about `buckets` buckets, as the whole-line summary.
 ///
 /// `stride` and `points` come back as DatasetTableModel::NumericGrid would have

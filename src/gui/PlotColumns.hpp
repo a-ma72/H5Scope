@@ -17,8 +17,8 @@
 // previous column correctly. That sub-pixel edge is the difference between a
 // min–max bar and a true stroke.
 //
-// See the plotcore design notes: followCurve repaired chords under an
-// index-led fold; this file is the column-led replacement.
+// Replaces the earlier index-bucket polyline plus chord repair: the pane's
+// columns are the unit of visibility, so they are the unit of the fold.
 
 #include "gui/PlotPyramid.hpp"
 

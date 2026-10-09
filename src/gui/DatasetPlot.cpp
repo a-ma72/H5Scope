@@ -254,42 +254,14 @@ void DatasetPlot::applyColumns()
     refreshDetail();
 }
 
-void DatasetPlot::bend(const LinePyramid& pyramid, std::vector<double>& values,
-                       std::vector<double>& positions) const
-{
-    if (positions.size() != values.size()) {
-        positions.clear();
-        return;
-    }
-    followCurve(pyramid, values, positions, yPerPixel_, curveBudget(paneBuckets()));
-}
-
 void DatasetPlot::setYPerPixel(double value)
 {
+    // Kept for the QML/C API shape. Column strokes place entry/exit by
+    // geometry; a y-pixel tolerance is not part of that picture.
     if (!(value > 0.0) || !std::isfinite(value)) {
         value = 0.0;
     }
-    const double scale = std::max(std::abs(yPerPixel_), std::abs(value));
-    if (value == yPerPixel_ || (scale > 0.0 && std::abs(value - yPerPixel_) <= scale * 1e-3)) {
-        return;
-    }
     yPerPixel_ = value;
-    // Nothing has been folded yet. The first fold bends against this pixel.
-    if (!sampled_) {
-        return;
-    }
-    // The chords were judged against another pixel. The pyramids stay, so the
-    // next fold is arithmetic and not a read.
-    retire(lines_);
-    lines_.clear();
-    retire(positions_);
-    positions_.clear();
-    points_ = 0;
-    sampled_ = false;
-    clearDetail();
-    dropFold();
-    emit changed();
-    refreshDetail();
 }
 
 void DatasetPlot::setPaneColumns(int columns)
@@ -471,7 +443,6 @@ void DatasetPlot::readMissing() const
         if (!fillWhole(pyramid->second, cap_ / 2, summary, stride, step, &positions)) {
             continue;
         }
-        bend(pyramid->second, summary, positions);
         // Every line covers the same extent of the other axis, so these are the
         // same for all of them and the last word is as good as the first. The
         // extent is what the x axis is drawn against, so it has to be one
@@ -730,7 +701,6 @@ void DatasetPlot::dropFold() const
     retire(fold_.values);
     retire(fold_.xs);
     fold_.summarised.clear();
-    fold_.edges.clear();
     fold_.grid.clear();
     fold_.armed = false;
 }
@@ -1305,7 +1275,6 @@ bool DatasetPlot::fillDetail(const PlotWindow& detail)
         // extremes occurred.
         level.points = static_cast<int>(folded.size());
         level.step = detail.bucket == 1 ? 1.0 : static_cast<double>(detail.bucket) / 2.0;
-        bend(pyramids_[series], folded, positions);
         if (positions.size() == folded.size()) {
             level.positions[series] = std::move(positions);
         }

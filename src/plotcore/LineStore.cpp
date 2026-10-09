@@ -437,8 +437,6 @@ void LineStore::clearLines()
     lines_.clear();
     axis_ = Entry{};
     hasAxis_ = false;
-    logColumns_.reset();
-    logEdges_.clear();
     retired_.clear();
     length_ = 0;
     minimum_ = 0.0;
@@ -740,7 +738,7 @@ void LineStore::refreshEntry(Entry& entry, const std::optional<PlotWindow>& want
         }
         return;
     }
-    if (entry.closerValid && entry.closerWindow == *wanted && entry.closerY == yPerPixel_) {
+    if (entry.closerValid && entry.closerWindow == *wanted) {
         return;
     }
     std::vector<double> folded;
@@ -773,7 +771,6 @@ void LineStore::refreshEntry(Entry& entry, const std::optional<PlotWindow>& want
     entry.closer = std::move(folded);
     entry.closerWindow = *wanted;
     entry.closerStep = wanted->bucket == 1 ? 1.0 : static_cast<double>(wanted->bucket) / 2.0;
-    entry.closerY = yPerPixel_;
     entry.closerValid = true;
 }
 
@@ -903,8 +900,6 @@ void LineStore::dropFolds()
         entry.foldValid = false;
         entry.foldSummarised = false;
     }
-    logColumns_.reset();
-    logEdges_.clear();
 }
 
 double LineStore::timeAt(const Entry& time, long long at) const
@@ -922,48 +917,8 @@ double LineStore::timeAt(const Entry& time, long long at) const
     return bottom.values[static_cast<std::size_t>(at / bottom.bucket) * 2];
 }
 
-bool LineStore::timeEdges(const Entry& time, const LogColumns& columns, std::vector<double>& out) const
-{
-    out.clear();
-    if (time.pyramid.empty() || columns.density <= 0) {
-        return false;
-    }
-    const std::vector<double>& bottom = time.pyramid.levels.front().values;
-    const bool ascending = std::is_sorted(bottom.begin(), bottom.end());
-    const bool descending = !ascending && std::is_sorted(bottom.rbegin(), bottom.rend());
-    if (!ascending && !descending) {
-        return false;
-    }
-    const long long length = time.pyramid.length;
-    const auto before = [&](double x) {
-        long long low = 0;
-        long long high = length;
-        while (low < high) {
-            const long long mid = low + (high - low) / 2;
-            const double t = timeAt(time, mid);
-            if (ascending ? t < x : t >= x) {
-                low = mid + 1;
-            } else {
-                high = mid;
-            }
-        }
-        return low;
-    };
-    out.reserve(static_cast<std::size_t>(columns.last - columns.first + 1));
-    for (long long k = columns.first; k <= columns.last; ++k) {
-        out.push_back(static_cast<double>(before(columns.edge(k))));
-    }
-    if (descending) {
-        std::reverse(out.begin(), out.end());
-    }
-    return out.size() >= 2;
-}
-
 void LineStore::refreshColumnStroke()
 {
-    logColumns_.reset();
-    logEdges_.clear();
-
     double x0 = 0.0;
     double x1 = 0.0;
     if (asked_) {

@@ -1683,33 +1683,6 @@ Item {
         const extent = surface.flipped ? frame.height - frame.gutterTop
                                        : frame.width - frame.gutterRight
         surface.plot.setPaneColumns(Math.round(extent * surface.pixelRatio))
-        surface.pushYPixel()
-    }
-
-    /// One device pixel of y, in the data's units.
-    ///
-    /// The envelope is a chord between the two extremes of a column. Where
-    /// that chord leaves the curve by more than a pixel, the fold puts the
-    /// sample back, so a spike inside a coarse bucket stays at its own sample
-    /// rather than becoming a triangle the width of the column -- the picture
-    /// the next octave in was the first to draw correctly. A logarithmic y
-    /// has no constant pixel, so the chords stay straight there.
-    ///
-    /// The frame rather than the plot area, for the reason pushColumns names:
-    /// the area's size is the gutters, and a finer fold can move an extreme a
-    /// tick label is measured from.
-    function pushYPixel() {
-        if (!surface.active || !surface.plot)
-            return
-        if (surface.yLog) {
-            surface.plot.setYPerPixel(0)
-            return
-        }
-        const span = surface.viewMaxY - surface.viewMinY
-        const extent = surface.flipped ? frame.width - frame.gutterRight
-                                       : frame.height - frame.gutterTop
-        const pixels = Math.max(1, extent * surface.pixelRatio)
-        surface.plot.setYPerPixel(span > 0 && isFinite(span) ? span / pixels : 0)
     }
 
     /// Device pixels per logical one, which is the other factor in the pane's
@@ -1725,8 +1698,6 @@ Item {
 
     onViewMinXChanged: surface.pushRange()
     onViewMaxXChanged: surface.pushRange()
-    onViewMinYChanged: surface.pushYPixel()
-    onViewMaxYChanged: surface.pushYPixel()
 
     // A window does not survive a change of scale, and cannot: the pan is a
     // distance along the axis, and the axis has just changed what a distance
