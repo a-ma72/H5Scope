@@ -806,7 +806,7 @@ TEST_CASE("a spike inside a coarse column keeps its sample x on the stroke",
     const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), kCount, 1);
     gui::ColumnStroke stroke;
     REQUIRE(gui::rasterColumns(pyramid, line.data(), kCount, {}, 0.0,
-                               static_cast<double>(kCount - 1), 4, false, stroke));
+                               static_cast<double>(kCount - 1), 4, false, false, stroke));
     REQUIRE(stroke.xs.size() == stroke.values.size());
     bool peak = false;
     bool trough = false;
@@ -831,11 +831,12 @@ TEST_CASE("zooming from many samples per column to one keeps the spike", "[level
     line[2000] = 9.0;
     const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), kCount, 1);
     gui::ColumnStroke wide;
-    REQUIRE(gui::rasterColumns(pyramid, line.data(), kCount, {}, 0.0, 3999.0, 64, false, wide));
+    REQUIRE(gui::rasterColumns(pyramid, line.data(), kCount, {}, 0.0, 3999.0, 64, false, false, wide));
     CHECK(std::any_of(wide.values.begin(), wide.values.end(),
                       [](double y) { return y == 9.0; }));
     gui::ColumnStroke close;
-    REQUIRE(gui::rasterColumns(pyramid, line.data(), kCount, {}, 1980.0, 2020.0, 64, false, close));
+    REQUIRE(gui::rasterColumns(pyramid, line.data(), kCount, {}, 1980.0, 2020.0, 64, false, false,
+                               close));
     CHECK_FALSE(close.summarised);
     CHECK(std::any_of(close.values.begin(), close.values.end(),
                       [](double y) { return y == 9.0; }));
@@ -1326,7 +1327,8 @@ TEST_CASE("a one-sample spike survives the column stroke", "[levels][columns]")
     line[4'000] = 17.0;
     const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), 10'000, 1);
     gui::ColumnStroke stroke;
-    REQUIRE(gui::rasterColumns(pyramid, line.data(), 10'000, {}, 0.0, 9'999.0, 256, false, stroke));
+    REQUIRE(gui::rasterColumns(pyramid, line.data(), 10'000, {}, 0.0, 9'999.0, 256, false, false,
+                               stroke));
     REQUIRE_FALSE(stroke.values.empty());
     CHECK(stroke.summarised);
     CHECK(std::any_of(stroke.values.begin(), stroke.values.end(),
@@ -1342,7 +1344,7 @@ TEST_CASE("one sample per column is a polyline through the samples", "[levels][c
     }
     const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), 10, 1);
     gui::ColumnStroke stroke;
-    REQUIRE(gui::rasterColumns(pyramid, line.data(), 10, {}, 0.0, 9.0, 10, false, stroke));
+    REQUIRE(gui::rasterColumns(pyramid, line.data(), 10, {}, 0.0, 9.0, 10, false, false, stroke));
     CHECK_FALSE(stroke.summarised);
     REQUIRE(stroke.values.size() == 10);
     for (int i = 0; i < 10; ++i) {
@@ -1363,7 +1365,7 @@ TEST_CASE("entry at a column edge follows the slope from the previous sample",
     }
     const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), 100, 1);
     gui::ColumnStroke stroke;
-    REQUIRE(gui::rasterColumns(pyramid, line.data(), 100, {}, 0.0, 99.0, 10, false, stroke));
+    REQUIRE(gui::rasterColumns(pyramid, line.data(), 100, {}, 0.0, 99.0, 10, false, false, stroke));
     REQUIRE(stroke.summarised);
     REQUIRE(stroke.xs.size() == stroke.values.size());
     REQUIRE(stroke.xs.size() >= 2);
@@ -1391,7 +1393,80 @@ TEST_CASE("uneven times still put samples in the column their time falls in",
     const gui::LinePyramid pyramid = gui::pyramidOf(y.data(), 5, 1);
     gui::ColumnStroke stroke;
     // Two columns: [0, 5.5) and [5.5, 11]. The spike at t=10 sits in the second.
-    REQUIRE(gui::rasterColumns(pyramid, y.data(), 5, t, 0.0, 11.0, 2, false, stroke));
+    REQUIRE(gui::rasterColumns(pyramid, y.data(), 5, t, 0.0, 11.0, 2, false, false, stroke));
     CHECK(std::any_of(stroke.values.begin(), stroke.values.end(),
                       [](double v) { return v == 2.0; }));
+}
+
+TEST_CASE("a logarithmic y axis does not invent a lower edge across a sign change",
+          "[levels][columns][log]")
+{
+    // +1 then −1 then +1: linear lerp toward the negative would invent a
+    // fractional positive at a column edge. Log-y splits positive runs and
+    // gaps between them.
+    std::vector<double> step(100, 1.0);
+    for (int i = 30; i < 70; ++i) {
+        step[static_cast<std::size_t>(i)] = -1.0;
+    }
+    const gui::LinePyramid pyramid = gui::pyramidOf(step.data(), 100, 1);
+    gui::ColumnStroke stroke;
+    REQUIRE(gui::rasterColumns(pyramid, step.data(), 100, {}, 0.0, 99.0, 10, false, true, stroke));
+    REQUIRE_FALSE(stroke.values.empty());
+    for (double y : stroke.values) {
+        if (std::isfinite(y)) {
+            CHECK(y == Approx(1.0));
+        }
+    }
+    CHECK(std::any_of(stroke.values.begin(), stroke.values.end(),
+                      [](double y) { return !std::isfinite(y); }));
+    int runs = 0;
+    bool in = false;
+    for (double y : stroke.values) {
+        if (std::isfinite(y)) {
+            if (!in) {
+                ++runs;
+                in = true;
+            }
+        } else {
+            in = false;
+        }
+    }
+    CHECK(runs == 2);
+}
+
+TEST_CASE("a dense logarithmic y column probes positive runs without inventing values",
+          "[levels][columns][log]")
+{
+    // Wider than kLogYExact samples per column: the hybrid takes the pyramid
+    // probe path. Two sine lobes, no finite y at or below zero.
+    constexpr int kCount = 20'000;
+    constexpr int kColumns = 64; // ~312 samples/column
+    std::vector<double> sine(static_cast<std::size_t>(kCount));
+    for (int i = 0; i < kCount; ++i) {
+        sine[static_cast<std::size_t>(i)] =
+            std::sin(2.0 * 3.14159265358979323846 * static_cast<double>(i) / kCount * 2.0);
+    }
+    const gui::LinePyramid pyramid = gui::pyramidOf(sine.data(), kCount, 1);
+    gui::ColumnStroke stroke;
+    REQUIRE(gui::rasterColumns(pyramid, sine.data(), kCount, {}, 0.0,
+                               static_cast<double>(kCount - 1), kColumns, false, true, stroke));
+    REQUIRE_FALSE(stroke.values.empty());
+    for (double y : stroke.values) {
+        if (std::isfinite(y)) {
+            CHECK(y > 0.0);
+        }
+    }
+    int runs = 0;
+    bool in = false;
+    for (double y : stroke.values) {
+        if (std::isfinite(y)) {
+            if (!in) {
+                ++runs;
+                in = true;
+            }
+        } else {
+            in = false;
+        }
+    }
+    CHECK(runs == 2);
 }

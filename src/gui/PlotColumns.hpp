@@ -17,6 +17,12 @@
 // previous column correctly. That sub-pixel edge is the difference between a
 // min–max bar and a true stroke.
 //
+// On a logarithmic y axis a value at or below zero is a gap (matplotlib's
+// nonpositive="mask"). With a raw row the stroke splits each column into
+// contiguous positive runs in one tight scan (O(n) over the view). Without
+// raw it falls back to a pyramid envelope that gaps non-positive extremes.
+// Entry/exit lerps require both ends above zero.
+//
 // Replaces the earlier index-bucket polyline plus chord repair: the pane's
 // columns are the unit of visibility, so they are the unit of the fold.
 
@@ -51,8 +57,7 @@ void columnEdges(double xMin, double xMax, int columns, bool xLog, std::vector<d
 [[nodiscard]] inline const double* rawSamples(const LinePyramid& pyramid, const double* held,
                                               long long count)
 {
-    if (held != nullptr && count > 0 &&
-        (pyramid.empty() || count == pyramid.length)) {
+    if (held != nullptr && count > 0 && (pyramid.empty() || count == pyramid.length)) {
         return held;
     }
     if (!pyramid.empty() && pyramid.baseBucket() == 1 &&
@@ -77,18 +82,24 @@ void columnEdges(double xMin, double xMax, int columns, bool xLog, std::vector<d
 /// `times` non-empty: one monotonic time per sample. Otherwise x is
 /// `indexStart + i * indexStep` (the Plot tab's stated axis).
 ///
+/// `yLog`: non-positive y is a gap; positive runs are folded separately and
+/// entry/exit lerps require both ends above zero.
+///
 /// False when nothing drawable can be produced (empty pyramid, bad view, no
 /// columns).
 [[nodiscard]] bool rasterColumns(const LinePyramid& pyramid, const double* raw, long long count,
                                  std::span<const double> times, double indexStart, double indexStep,
-                                 double xMin, double xMax, int columns, bool xLog, ColumnStroke& out);
+                                 double xMin, double xMax, int columns, bool xLog, bool yLog,
+                                 ColumnStroke& out);
 
 /// Index axis (`x = i`). Same as `rasterColumns(..., 0, 1, ...)`.
 [[nodiscard]] inline bool rasterColumns(const LinePyramid& pyramid, const double* raw,
                                         long long count, std::span<const double> times, double xMin,
-                                        double xMax, int columns, bool xLog, ColumnStroke& out)
+                                        double xMax, int columns, bool xLog, bool yLog,
+                                        ColumnStroke& out)
 {
-    return rasterColumns(pyramid, raw, count, times, 0.0, 1.0, xMin, xMax, columns, xLog, out);
+    return rasterColumns(pyramid, raw, count, times, 0.0, 1.0, xMin, xMax, columns, xLog, yLog,
+                         out);
 }
 
 } // namespace gui

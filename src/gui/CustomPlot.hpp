@@ -113,6 +113,8 @@ class CustomPlot : public QAbstractListModel
     /// Whether the x axis places a value by its logarithm. See
     /// DatasetPlot::xLog, which is the same fact asked for the same reason.
     Q_PROPERTY(bool xLog READ xLog WRITE setXLog NOTIFY xAxisChanged)
+    /// Whether the y axis places a value by its logarithm. See DatasetPlot::yLog.
+    Q_PROPERTY(bool yLog READ yLog WRITE setYLog NOTIFY changed)
     Q_PROPERTY(bool hasData READ hasData NOTIFY changed)
     Q_PROPERTY(QString error READ error NOTIFY changed)
     /// Whether anything has been asked of the file yet for this tab. The view
@@ -345,6 +347,8 @@ public:
     void setXStep(double value);
     [[nodiscard]] bool xLog() const { return xLog_; }
     void setXLog(bool logarithmic);
+    [[nodiscard]] bool yLog() const { return yLog_; }
+    void setYLog(bool logarithmic);
     [[nodiscard]] bool hasData() const;
     [[nodiscard]] QString error() const;
     [[nodiscard]] bool empty() const { return entries_.empty(); }
@@ -830,12 +834,14 @@ private:
     double xStart_ = 0.0;
     double xStep_ = 1.0;
     bool xLog_ = false;
+    bool yLog_ = false;
 
     /// The grid every entry's fold was made on, and what each point's x was
     /// worked out with. See Entry::foldValues.
     mutable LogFoldGrid foldGrid_;
     mutable long long foldGeneration_ = 0;
     mutable bool foldArmed_ = false;
+    mutable bool foldYLog_ = false;
     mutable double foldViewMin_ = 0.0;
     mutable double foldViewMax_ = 0.0;
     /// Whether the held time base runs one way, asked once per time base

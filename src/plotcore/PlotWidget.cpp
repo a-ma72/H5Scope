@@ -157,6 +157,9 @@ void PlotWidget::setYLog(bool on)
         }
     }
     camera_.setYLog(on);
+    if (store_ != nullptr) {
+        store_->setYLog(on);
+    }
     for (const Held& item : held) {
         double scale = poses_[item.index].scaleY;
         double shift = poses_[item.index].shiftY;

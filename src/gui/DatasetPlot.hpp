@@ -143,6 +143,10 @@ class DatasetPlot : public QObject
     /// On `xAxisChanged` for that signal's reason: the same points, drawn at
     /// different places, and nothing to re-read.
     Q_PROPERTY(bool xLog READ xLog WRITE setXLog NOTIFY xAxisChanged)
+    /// Whether the y axis places a value by its logarithm. Column strokes
+    /// treat non-positive y as a gap (see PlotColumns). Same NOTIFY as the
+    /// view changing: the fold is rebuilt, nothing is re-read from the file.
+    Q_PROPERTY(bool yLog READ yLog WRITE setYLog NOTIFY changed)
     Q_PROPERTY(bool numeric READ numeric NOTIFY changed)
     Q_PROPERTY(bool hasData READ hasData NOTIFY changed)
     Q_PROPERTY(QString error READ error NOTIFY changed)
@@ -170,6 +174,8 @@ public:
     void setXStep(double value);
     [[nodiscard]] bool xLog() const { return xLog_; }
     void setXLog(bool logarithmic);
+    [[nodiscard]] bool yLog() const { return yLog_; }
+    void setYLog(bool logarithmic);
     [[nodiscard]] bool numeric() const;
     [[nodiscard]] bool hasData() const;
     [[nodiscard]] QString error() const;
@@ -587,6 +593,7 @@ private:
     double xStart_ = 0.0;
     double xStep_ = 1.0;
     bool xLog_ = false;
+    bool yLog_ = false;
 
     /// Every drawn line folded onto the pane's pixel columns. See
     /// LogColumns / LinearColumns and PlotColumns.
@@ -603,6 +610,7 @@ private:
         LogFoldGrid grid;
         double viewMin = 0.0;
         double viewMax = 0.0;
+        bool yLog = false;
         bool armed = false;
         std::map<int, std::vector<double>> values;
         std::map<int, std::vector<double>> xs;

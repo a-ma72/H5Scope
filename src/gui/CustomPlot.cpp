@@ -1167,6 +1167,16 @@ void CustomPlot::setXLog(bool logarithmic)
     refreshCloser();
 }
 
+void CustomPlot::setYLog(bool logarithmic)
+{
+    if (yLog_ == logarithmic) {
+        return;
+    }
+    yLog_ = logarithmic;
+    dropFold();
+    announce();
+}
+
 std::optional<LogColumns> CustomPlot::foldWanted() const
 {
     const int drawn = seriesCount();
@@ -1198,7 +1208,7 @@ std::optional<LogColumns> CustomPlot::foldWanted() const
 
 bool CustomPlot::foldServes() const
 {
-    return foldArmed_ &&
+    return foldArmed_ && foldYLog_ == yLog_ &&
            foldGrid_.serves(xStart_, xStep_, static_cast<int>(xMode_), bucketBudget(), viewMin_,
                             viewMax_);
 }
@@ -1212,6 +1222,7 @@ void CustomPlot::dropFold() const
     }
     foldGrid_.clear();
     foldArmed_ = false;
+    foldYLog_ = false;
     ++foldGeneration_;
 }
 
@@ -1265,6 +1276,7 @@ bool CustomPlot::foldedLine(const Entry& entry, PlotLine& line) const
                          viewMax_, xLog_);
         foldViewMin_ = viewMin_;
         foldViewMax_ = viewMax_;
+        foldYLog_ = yLog_;
         foldArmed_ = foldGrid_.columns.has_value() || foldGrid_.linear.has_value();
         if (!foldArmed_) {
             return false;
@@ -1301,11 +1313,11 @@ bool CustomPlot::foldedLine(const Entry& entry, PlotLine& line) const
             }
             if (!times.empty() && static_cast<long long>(times.size()) == entry.pyramid.length) {
                 ok = rasterColumns(entry.pyramid, raw, entry.pyramid.length, times, 0.0, 1.0,
-                                   foldMin, foldMax, foldColumns, xLog_, stroke);
+                                   foldMin, foldMax, foldColumns, xLog_, yLog_, stroke);
             }
         } else {
             ok = rasterColumns(entry.pyramid, raw, entry.pyramid.length, {}, xStart_,
-                               xStep_ * scale, foldMin, foldMax, foldColumns, xLog_, stroke);
+                               xStep_ * scale, foldMin, foldMax, foldColumns, xLog_, yLog_, stroke);
         }
         if (!ok) {
             entry.foldGeneration = -1;

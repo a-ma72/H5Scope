@@ -669,6 +669,16 @@ void DatasetPlot::setXLog(bool logarithmic)
     refreshDetail();
 }
 
+void DatasetPlot::setYLog(bool logarithmic)
+{
+    if (yLog_ == logarithmic) {
+        return;
+    }
+    yLog_ = logarithmic;
+    dropFold();
+    emit changed();
+}
+
 std::optional<LogColumns> DatasetPlot::foldWanted() const
 {
     // Column strokes cover linear and log. The optional is only a "wanted"
@@ -689,7 +699,7 @@ std::optional<LogColumns> DatasetPlot::foldWanted() const
 
 bool DatasetPlot::foldServes() const
 {
-    return fold_.armed &&
+    return fold_.armed && fold_.yLog == yLog_ &&
            fold_.grid.serves(xStart_, xStep_, xLog_ ? 1 : 0, paneBuckets(), viewMin_, viewMax_);
 }
 
@@ -717,6 +727,7 @@ bool DatasetPlot::foldedLine(int series, PlotLine& line) const
                           xLog_);
         fold_.viewMin = viewMin_;
         fold_.viewMax = viewMax_;
+        fold_.yLog = yLog_;
         fold_.armed = fold_.grid.columns.has_value() || fold_.grid.linear.has_value();
         if (!fold_.armed) {
             return false;
@@ -741,7 +752,7 @@ bool DatasetPlot::foldedLine(int series, PlotLine& line) const
         const double* raw = rawSamples(pyramid->second, nullptr, pyramid->second.length);
         ColumnStroke stroke;
         if (!rasterColumns(pyramid->second, raw, pyramid->second.length, {}, xStart_, xStep_,
-                           foldMin, foldMax, foldColumns, xLog_, stroke)) {
+                           foldMin, foldMax, foldColumns, xLog_, yLog_, stroke)) {
             return false;
         }
         fold_.xs[series] = std::move(stroke.xs);

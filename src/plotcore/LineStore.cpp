@@ -432,6 +432,16 @@ void LineStore::setXLog(bool on)
     emitChanged();
 }
 
+void LineStore::setYLog(bool on)
+{
+    if (yLog_ == on) {
+        return;
+    }
+    yLog_ = on;
+    dropFolds();
+    emitChanged();
+}
+
 void LineStore::clearLines()
 {
     lines_.clear();
@@ -900,6 +910,7 @@ void LineStore::dropFolds()
         entry.foldSummarised = false;
     }
     foldGrid_.clear();
+    foldYLog_ = false;
 }
 
 double LineStore::timeAt(const Entry& time, long long at) const
@@ -934,9 +945,10 @@ void LineStore::refreshColumnStroke()
 
     // Index axis for LineStore strokes: start 0, step 1 (or times). Mode 0.
     constexpr int kMode = 0;
-    if (!foldGrid_.serves(0.0, 1.0, kMode, columns_, x0, x1)) {
+    if (!foldGrid_.serves(0.0, 1.0, kMode, columns_, x0, x1) || foldYLog_ != yLog_) {
         dropFolds();
         foldGrid_.remake(0.0, 1.0, kMode, columns_, x0, x1, xLog_);
+        foldYLog_ = yLog_;
     }
     double foldMin = 0.0;
     double foldMax = 0.0;
@@ -961,8 +973,8 @@ void LineStore::refreshColumnStroke()
         const double* raw =
             rawSamples(entry.pyramid, entry.values, static_cast<long long>(entry.count));
         ColumnStroke stroke;
-        if (!rasterColumns(entry.pyramid, raw, static_cast<long long>(entry.count), times, foldMin,
-                           foldMax, foldColumns, xLog_, stroke)) {
+        if (!rasterColumns(entry.pyramid, raw, static_cast<long long>(entry.count), times, 0.0, 1.0,
+                           foldMin, foldMax, foldColumns, xLog_, yLog_, stroke)) {
             continue;
         }
         entry.foldValues = std::move(stroke.values);

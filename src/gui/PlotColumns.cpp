@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace gui {
 namespace {
@@ -15,6 +16,12 @@ namespace {
 /// that a raw walk is a handful of doubles already in cache; above it the
 /// pyramid answers in O(log n) instead of O(samples).
 constexpr int kPyramidPrefer = 32;
+
+/// Log-y: exact positive-run split (raw scan) only while a column is this
+/// short. Wider columns probe the pyramid in O(probes) steps and merge
+/// all-positive spans — dense sine lobes stay gapped without an O(n) walk.
+constexpr int kLogYExact = 64;
+constexpr int kLogYProbes = 48;
 
 double sampleX(std::span<const double> times, long long i, double indexStart, double indexStep)
 {
@@ -46,6 +53,12 @@ double lerpY(double x0, double y0, double x1, double y1, double at)
     return y0 + t * (y1 - y0);
 }
 
+/// Whether `y` has a place on the y axis the stroke is built for.
+bool drawableY(double y, bool yLog)
+{
+    return std::isfinite(y) && (!yLog || y > 0.0);
+}
+
 void emitPoint(ColumnStroke& out, double x, double y)
 {
     if (!std::isfinite(x) || !std::isfinite(y)) {
@@ -60,6 +73,20 @@ void emitPoint(ColumnStroke& out, double x, double y)
     }
     out.xs.push_back(x);
     out.values.push_back(y);
+}
+
+/// Break the stroke so projectLine does not chord across a log-y gap.
+void emitGap(ColumnStroke& out)
+{
+    if (out.values.empty()) {
+        return;
+    }
+    if (!std::isfinite(out.values.back())) {
+        return;
+    }
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    out.xs.push_back(nan);
+    out.values.push_back(nan);
 }
 
 bool yAt(const LinePyramid& pyramid, const double* raw, long long count, long long i, double& out)
@@ -102,8 +129,6 @@ int columnIndex(std::span<const double> edges, double x, bool xLog, double xMin,
     return std::clamp(c, 0, columns - 1);
 }
 
-/// First sample index with x >= t. Times must be non-decreasing; the index
-/// axis uses a positive step (negative step takes the walk path below).
 long long firstAtLeast(std::span<const double> times, long long count, double indexStart,
                        double indexStep, double t)
 {
@@ -115,7 +140,6 @@ long long firstAtLeast(std::span<const double> times, long long count, double in
     return std::clamp(static_cast<long long>(std::ceil(at - 1e-15)), 0LL, count);
 }
 
-/// First sample index with x > t (inclusive right edge of the last column).
 long long firstAfter(std::span<const double> times, long long count, double indexStart,
                      double indexStep, double t)
 {
@@ -133,61 +157,232 @@ Extremes extremesFor(const LinePyramid& pyramid, const double* raw, long long fi
         return {};
     }
     const long long n = last - first;
-    // Wide column: pyramid. Narrow with raw in hand: one contiguous read.
     if (raw != nullptr && n < kPyramidPrefer) {
         return extremesOf(raw, first, last);
     }
     return extremesOver(pyramid, first, last);
 }
 
-/// Entry → extrema → exit for one multi-sample column. Returns false when the
-/// run has no finite extreme (a gap).
-bool emitSummarised(const LinePyramid& pyramid, const double* row, long long count,
-                    std::span<const double> times, double indexStart, double indexStep,
-                    std::span<const double> edges, bool xLog, double invWidth, int columns, int c,
-                    long long first, long long lastEx, ColumnStroke& out)
+/// Gap when the next drawable sample is not adjacent to the last one — covers
+/// whole columns of non-positive y that emit nothing of their own.
+void gapIfSkipped(long long nextIndex, long long& lastDrawable, ColumnStroke& out)
 {
-    const Extremes ext = extremesFor(pyramid, row, first, lastEx);
-    if (!ext.found()) {
+    if (lastDrawable >= 0 && nextIndex > lastDrawable + 1) {
+        emitGap(out);
+    }
+}
+
+/// Entry → extrema → exit for one drawable run `[first, lastEx)`.
+bool emitRun(const LinePyramid& pyramid, const double* row, long long count,
+             std::span<const double> times, double indexStart, double indexStep,
+             std::span<const double> edges, bool xLog, bool yLog, double invWidth, int columns,
+             int c, long long first, long long lastEx, const Extremes& ext, bool allowEntry,
+             bool allowExit, long long& lastDrawable, ColumnStroke& out)
+{
+    if (!ext.found() || !drawableY(ext.first(), yLog)) {
         return false;
     }
     out.summarised = true;
-
     const double t0 = edges[static_cast<std::size_t>(c)];
     const double t1 = edges[static_cast<std::size_t>(c) + 1];
     const long long at0 = ext.firstAt();
     const long long at1 = ext.secondAt();
+    const double y0 = ext.first();
+    const double y1 = drawableY(ext.second(), yLog) ? ext.second() : y0;
     const double xExt0 = sampleX(times, at0, indexStart, indexStep);
     const double xExt1 = sampleX(times, at1, indexStart, indexStep);
 
-    const long long prev = first - 1;
-    if (prev >= 0) {
-        double yPrev = 0.0;
-        if (yAt(pyramid, row, count, prev, yPrev)) {
-            const double xPrev = sampleX(times, prev, indexStart, indexStep);
-            const int cPrev = columnIndex(edges, xPrev, xLog, edges.front(), invWidth, columns);
-            if (cPrev < 0 || c - cPrev <= 1) {
-                emitPoint(out, t0, lerpY(xPrev, yPrev, xExt0, ext.first(), t0));
+    gapIfSkipped(first, lastDrawable, out);
+
+    if (allowEntry) {
+        const long long prev = first - 1;
+        if (prev >= 0) {
+            double yPrev = 0.0;
+            if (yAt(pyramid, row, count, prev, yPrev) && drawableY(yPrev, yLog)) {
+                const double xPrev = sampleX(times, prev, indexStart, indexStep);
+                const int cPrev = columnIndex(edges, xPrev, xLog, edges.front(), invWidth, columns);
+                if (cPrev < 0 || c - cPrev <= 1) {
+                    const double yEdge = lerpY(xPrev, yPrev, xExt0, y0, t0);
+                    if (drawableY(yEdge, yLog)) {
+                        emitPoint(out, t0, yEdge);
+                    }
+                }
             }
         }
     }
 
-    emitPoint(out, xExt0, ext.first());
-    if (at0 != at1) {
-        emitPoint(out, xExt1, ext.second());
+    emitPoint(out, xExt0, y0);
+    if (at0 != at1 && drawableY(y1, yLog)) {
+        emitPoint(out, xExt1, y1);
     }
+    lastDrawable = lastEx - 1;
 
-    if (lastEx < count) {
+    if (allowExit && lastEx < count) {
         double yNext = 0.0;
-        if (yAt(pyramid, row, count, lastEx, yNext)) {
+        if (yAt(pyramid, row, count, lastEx, yNext) && drawableY(yNext, yLog)) {
             const double xNext = sampleX(times, lastEx, indexStart, indexStep);
             const int cNext = columnIndex(edges, xNext, xLog, edges.front(), invWidth, columns);
             if (cNext < 0 || cNext - c <= 1) {
-                emitPoint(out, t1, lerpY(xExt1, ext.second(), xNext, yNext, t1));
+                const double yEdge = lerpY(xExt1, y1, xNext, yNext, t1);
+                if (drawableY(yEdge, yLog)) {
+                    emitPoint(out, t1, yEdge);
+                }
             }
         }
     }
     return true;
+}
+
+/// Exact positive-run split from a raw row. Cheap only for short columns.
+bool emitLogYExact(const LinePyramid& pyramid, const double* row, long long count,
+                   std::span<const double> times, double indexStart, double indexStep,
+                   std::span<const double> edges, bool xLog, double invWidth, int columns, int c,
+                   long long first, long long lastEx, long long& lastDrawable, ColumnStroke& out)
+{
+    bool any = false;
+    long long i = first;
+    while (i < lastEx) {
+        while (i < lastEx) {
+            const double y = row[static_cast<std::size_t>(i)];
+            if (std::isfinite(y) && y > 0.0) {
+                break;
+            }
+            ++i;
+        }
+        if (i >= lastEx) {
+            break;
+        }
+        const long long runFirst = i;
+        Extremes ext;
+        for (; i < lastEx; ++i) {
+            const double y = row[static_cast<std::size_t>(i)];
+            if (!(std::isfinite(y) && y > 0.0)) {
+                break;
+            }
+            if (ext.lowAt < 0 || y < ext.lowest) {
+                ext.lowest = y;
+                ext.lowAt = i;
+            }
+            if (ext.highAt < 0 || y > ext.highest) {
+                ext.highest = y;
+                ext.highAt = i;
+            }
+        }
+        const long long runLastEx = i;
+        if (!ext.found()) {
+            continue;
+        }
+        const bool allowEntry = (runFirst == first);
+        const bool allowExit = (runLastEx == lastEx);
+        if (runLastEx - runFirst == 1) {
+            gapIfSkipped(runFirst, lastDrawable, out);
+            emitPoint(out, sampleX(times, runFirst, indexStart, indexStep),
+                      row[static_cast<std::size_t>(runFirst)]);
+            lastDrawable = runFirst;
+            any = true;
+            continue;
+        }
+        if (emitRun(pyramid, row, count, times, indexStart, indexStep, edges, xLog, true, invWidth,
+                    columns, c, runFirst, runLastEx, ext, allowEntry, allowExit, lastDrawable,
+                    out)) {
+            any = true;
+        }
+    }
+    return any;
+}
+
+/// Dense log-y: classify O(kLogYProbes) pyramid spans, merge all-positive ones.
+/// Mixed spans are gaps — lobe edges may truncate by one probe, which is stable
+/// under pan and cheap (no sample walk).
+bool emitLogYProbed(const LinePyramid& pyramid, const double* row, long long count,
+                    std::span<const double> times, double indexStart, double indexStep,
+                    std::span<const double> edges, bool xLog, double invWidth, int columns, int c,
+                    long long first, long long lastEx, long long& lastDrawable, ColumnStroke& out)
+{
+    const long long span = lastEx - first;
+    const long long step =
+        std::max(1LL, (span + static_cast<long long>(kLogYProbes) - 1) /
+                          static_cast<long long>(kLogYProbes));
+
+    bool any = false;
+    long long i = first;
+    while (i < lastEx) {
+        // Skip probes that are not strictly all-positive.
+        while (i < lastEx) {
+            const long long j = std::min(i + step, lastEx);
+            const Extremes e = extremesFor(pyramid, row, i, j);
+            if (e.found() && e.lowest > 0.0) {
+                break;
+            }
+            i = j;
+        }
+        if (i >= lastEx) {
+            break;
+        }
+        const long long runFirst = i;
+        while (i < lastEx) {
+            const long long j = std::min(i + step, lastEx);
+            const Extremes e = extremesFor(pyramid, row, i, j);
+            if (!(e.found() && e.lowest > 0.0)) {
+                break;
+            }
+            i = j;
+        }
+        const long long runLastEx = i;
+        const Extremes ext = extremesFor(pyramid, row, runFirst, runLastEx);
+        if (!ext.found() || !(ext.lowest > 0.0)) {
+            continue;
+        }
+        const bool allowEntry = (runFirst == first);
+        const bool allowExit = (runLastEx == lastEx);
+        if (emitRun(pyramid, row, count, times, indexStart, indexStep, edges, xLog, true, invWidth,
+                    columns, c, runFirst, runLastEx, ext, allowEntry, allowExit, lastDrawable,
+                    out)) {
+            any = true;
+        }
+    }
+    return any;
+}
+
+/// One multi-sample column.
+///
+/// Linear y: pyramid/raw envelope.
+/// Log y: all-positive columns use that envelope; short mixed columns split
+/// positive runs exactly (raw); dense mixed columns probe the pyramid so a
+/// zoomed-out sine stays gapped without scanning every sample.
+bool emitSummarised(const LinePyramid& pyramid, const double* row, long long count,
+                    std::span<const double> times, double indexStart, double indexStep,
+                    std::span<const double> edges, bool xLog, bool yLog, double invWidth,
+                    int columns, int c, long long first, long long lastEx, long long& lastDrawable,
+                    ColumnStroke& out)
+{
+    if (!yLog) {
+        const Extremes ext = extremesFor(pyramid, row, first, lastEx);
+        return emitRun(pyramid, row, count, times, indexStart, indexStep, edges, xLog, false,
+                       invWidth, columns, c, first, lastEx, ext, true, true, lastDrawable, out);
+    }
+
+    const Extremes whole = extremesFor(pyramid, row, first, lastEx);
+    if (!whole.found()) {
+        return false;
+    }
+    if (whole.highest <= 0.0) {
+        return false; // nothing drawable
+    }
+    if (whole.lowest > 0.0) {
+        // Entire column positive: one envelope, O(log n).
+        return emitRun(pyramid, row, count, times, indexStart, indexStep, edges, xLog, true,
+                       invWidth, columns, c, first, lastEx, whole, true, true, lastDrawable, out);
+    }
+
+    // Mixed: sign change inside the column.
+    const long long span = lastEx - first;
+    if (row != nullptr && span <= kLogYExact) {
+        return emitLogYExact(pyramid, row, count, times, indexStart, indexStep, edges, xLog,
+                             invWidth, columns, c, first, lastEx, lastDrawable, out);
+    }
+    return emitLogYProbed(pyramid, row, count, times, indexStart, indexStep, edges, xLog, invWidth,
+                          columns, c, first, lastEx, lastDrawable, out);
 }
 
 } // namespace
@@ -221,8 +416,6 @@ void columnEdges(double xMin, double xMax, int columns, bool xLog, std::vector<d
 
 int columnOf(std::span<const double> edges, double x)
 {
-    // Public helper: no linear/log flag, so bisect. The hot path inside
-    // rasterColumns uses columnIndex with division on a linear axis.
     if (edges.size() < 2 || !std::isfinite(x) || x < edges.front() || x > edges.back()) {
         return -1;
     }
@@ -236,7 +429,7 @@ int columnOf(std::span<const double> edges, double x)
 
 bool rasterColumns(const LinePyramid& pyramid, const double* raw, long long count,
                    std::span<const double> times, double indexStart, double indexStep, double xMin,
-                   double xMax, int columns, bool xLog, ColumnStroke& out)
+                   double xMax, int columns, bool xLog, bool yLog, ColumnStroke& out)
 {
     out.values.clear();
     out.xs.clear();
@@ -262,18 +455,30 @@ bool rasterColumns(const LinePyramid& pyramid, const double* raw, long long coun
     const double span = edges.back() - edges.front();
     const double invWidth =
         (!xLog && span > 0.0) ? static_cast<double>(columns) / span : 0.0;
+    long long lastDrawable = -1;
 
     auto appendSample = [&](long long i) {
         double y = 0.0;
-        if (!yAt(pyramid, row, count, i, y)) {
+        if (!yAt(pyramid, row, count, i, y) || !drawableY(y, yLog)) {
             return;
         }
+        gapIfSkipped(i, lastDrawable, out);
         emitPoint(out, sampleX(times, i, indexStart, indexStep), y);
+        lastDrawable = i;
     };
 
-    // Negative index step: x decreases with i. Column ranges are still
-    // ascending in x, so map each sample by columnIndex instead of inverting
-    // the affine. Rare (stated axes run forward); keep it correct, not hot.
+    auto emitColumn = [&](int c, long long first, long long lastEx) {
+        if (lastEx <= first) {
+            return;
+        }
+        if (lastEx - first == 1) {
+            appendSample(first);
+            return;
+        }
+        emitSummarised(pyramid, row, count, times, indexStart, indexStep, edges, xLog, yLog,
+                       invWidth, columns, c, first, lastEx, lastDrawable, out);
+    };
+
     if (times.empty() && indexStep < 0.0) {
         struct ColumnInfo
         {
@@ -300,19 +505,16 @@ bool rasterColumns(const LinePyramid& pyramid, const double* raw, long long coun
             if (col.samples <= 0 || col.first < 0) {
                 continue;
             }
-            if (col.samples == 1) {
-                appendSample(col.first);
-                continue;
-            }
-            emitSummarised(pyramid, row, count, times, indexStart, indexStep, edges, xLog, invWidth,
-                           columns, c, col.first, col.last + 1, out);
+            emitColumn(c, col.first, col.last + 1);
+        }
+        // Trailing NaN gaps are not drawable content.
+        while (!out.values.empty() && !std::isfinite(out.values.back())) {
+            out.values.pop_back();
+            out.xs.pop_back();
         }
         return !out.values.empty();
     }
 
-    // Per column: index range by bisect/arithmetic, then extrema from the
-    // pyramid (wide) or a short raw run (narrow). O(columns · log n), not
-    // O(visible samples).
     for (int c = 0; c < columns; ++c) {
         const double t0 = edges[static_cast<std::size_t>(c)];
         const double t1 = edges[static_cast<std::size_t>(c) + 1];
@@ -321,17 +523,13 @@ bool rasterColumns(const LinePyramid& pyramid, const double* raw, long long coun
         const long long first = firstAtLeast(times, count, indexStart, indexStep, t0);
         const long long lastEx = lastCol ? firstAfter(times, count, indexStart, indexStep, t1)
                                          : firstAtLeast(times, count, indexStart, indexStep, t1);
-        if (lastEx <= first) {
-            continue;
-        }
-        if (lastEx - first == 1) {
-            appendSample(first);
-            continue;
-        }
-        emitSummarised(pyramid, row, count, times, indexStart, indexStep, edges, xLog, invWidth,
-                       columns, c, first, lastEx, out);
+        emitColumn(c, first, lastEx);
     }
 
+    while (!out.values.empty() && !std::isfinite(out.values.back())) {
+        out.values.pop_back();
+        out.xs.pop_back();
+    }
     return !out.values.empty();
 }
 

@@ -110,6 +110,9 @@ public:
     /// not a column on that axis. Under an octave the linear fold stays.
     void setXLog(bool on);
 
+    /// Whether y is logarithmic. Column strokes treat non-positive y as a gap.
+    void setYLog(bool on);
+
     void clearLines();
     void setPaneColumns(int columns);
     void setVisibleRange(double xMin, double xMax);
@@ -228,6 +231,7 @@ private:
     Entry axis_;
     bool hasAxis_ = false;
     bool xLog_ = false;
+    bool yLog_ = false;
     std::vector<std::vector<double>> retired_;
     int columns_ = kDefaultColumns;
     int cap_ = kMinPoints;
@@ -241,6 +245,7 @@ private:
     /// Column-stroke grid covering askedMin_..askedMax_ with margin. A pan
     /// inside that margin keeps every entry's foldValid stroke.
     LogFoldGrid foldGrid_;
+    bool foldYLog_ = false;
     long long length_ = 0;
     double minimum_ = 0.0;
     double maximum_ = 1.0;
