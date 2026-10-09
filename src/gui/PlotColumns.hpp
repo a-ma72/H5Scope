@@ -48,6 +48,11 @@ void columnEdges(double xMin, double xMax, int columns, bool xLog, std::vector<d
 
 /// Raster one line onto the view's pixel columns.
 ///
+/// Per column: the sample index range from the edges (arithmetic on an index
+/// axis, bisect on times), then extrema from the pyramid when the column is
+/// wide, else a short raw walk. Linear axes map x→column by division. Cost is
+/// O(columns · log n), not O(visible samples).
+///
 /// `raw` is the sample row when held (preferred). Absent, a pyramid whose base
 /// is one element is read as the row. Coarser bases answer multi-sample columns
 /// through `extremesOver`; a column that cuts the finest held bucket without a

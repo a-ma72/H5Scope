@@ -11,6 +11,11 @@
 namespace gui {
 namespace {
 
+/// Prefer the pyramid once a column holds at least this many samples. Below
+/// that a raw walk is a handful of doubles already in cache; above it the
+/// pyramid answers in O(log n) instead of O(samples).
+constexpr int kPyramidPrefer = 32;
+
 double sampleX(std::span<const double> times, long long i, double indexStart, double indexStep)
 {
     if (!times.empty() && i >= 0 && static_cast<std::size_t>(i) < times.size()) {
@@ -57,20 +62,6 @@ void emitPoint(ColumnStroke& out, double x, double y)
     out.values.push_back(y);
 }
 
-Extremes extremesIn(const LinePyramid& pyramid, const double* raw, long long count, long long first,
-                    long long last)
-{
-    first = std::max(first, 0LL);
-    last = std::min(last, count > 0 ? count : pyramid.length);
-    if (first >= last) {
-        return {};
-    }
-    if (raw != nullptr) {
-        return extremesOf(raw, first, last);
-    }
-    return extremesOver(pyramid, first, last);
-}
-
 bool yAt(const LinePyramid& pyramid, const double* raw, long long count, long long i, double& out)
 {
     if (i < 0 || i >= (count > 0 ? count : pyramid.length)) {
@@ -84,12 +75,118 @@ bool yAt(const LinePyramid& pyramid, const double* raw, long long count, long lo
         out = pyramid.levels.front().values[static_cast<std::size_t>(i)];
         return std::isfinite(out);
     }
-    // Coarse base without raw: the bucket that holds i is the only answer.
     const Extremes hit = extremesOver(pyramid, i, i + 1);
     if (!hit.found()) {
         return false;
     }
     out = hit.first();
+    return true;
+}
+
+/// Linear axis: column index by division. Log keeps a bisect on `edges`.
+int columnIndex(std::span<const double> edges, double x, bool xLog, double xMin, double invWidth,
+                int columns)
+{
+    if (edges.size() < 2 || !std::isfinite(x) || x < edges.front() || x > edges.back()) {
+        return -1;
+    }
+    if (x == edges.back()) {
+        return columns - 1;
+    }
+    if (!xLog) {
+        const int c = static_cast<int>((x - xMin) * invWidth);
+        return std::clamp(c, 0, columns - 1);
+    }
+    const auto it = std::upper_bound(edges.begin(), edges.end(), x);
+    const int c = static_cast<int>(it - edges.begin()) - 1;
+    return std::clamp(c, 0, columns - 1);
+}
+
+/// First sample index with x >= t. Times must be non-decreasing; the index
+/// axis uses a positive step (negative step takes the walk path below).
+long long firstAtLeast(std::span<const double> times, long long count, double indexStart,
+                       double indexStep, double t)
+{
+    if (!times.empty()) {
+        return static_cast<long long>(std::lower_bound(times.begin(), times.end(), t) -
+                                      times.begin());
+    }
+    const double at = (t - indexStart) / indexStep;
+    return std::clamp(static_cast<long long>(std::ceil(at - 1e-15)), 0LL, count);
+}
+
+/// First sample index with x > t (inclusive right edge of the last column).
+long long firstAfter(std::span<const double> times, long long count, double indexStart,
+                     double indexStep, double t)
+{
+    if (!times.empty()) {
+        return static_cast<long long>(std::upper_bound(times.begin(), times.end(), t) -
+                                      times.begin());
+    }
+    const double at = (t - indexStart) / indexStep;
+    return std::clamp(static_cast<long long>(std::floor(at + 1e-15)) + 1, 0LL, count);
+}
+
+Extremes extremesFor(const LinePyramid& pyramid, const double* raw, long long first, long long last)
+{
+    if (first >= last) {
+        return {};
+    }
+    const long long n = last - first;
+    // Wide column: pyramid. Narrow with raw in hand: one contiguous read.
+    if (raw != nullptr && n < kPyramidPrefer) {
+        return extremesOf(raw, first, last);
+    }
+    return extremesOver(pyramid, first, last);
+}
+
+/// Entry → extrema → exit for one multi-sample column. Returns false when the
+/// run has no finite extreme (a gap).
+bool emitSummarised(const LinePyramid& pyramid, const double* row, long long count,
+                    std::span<const double> times, double indexStart, double indexStep,
+                    std::span<const double> edges, bool xLog, double invWidth, int columns, int c,
+                    long long first, long long lastEx, ColumnStroke& out)
+{
+    const Extremes ext = extremesFor(pyramid, row, first, lastEx);
+    if (!ext.found()) {
+        return false;
+    }
+    out.summarised = true;
+
+    const double t0 = edges[static_cast<std::size_t>(c)];
+    const double t1 = edges[static_cast<std::size_t>(c) + 1];
+    const long long at0 = ext.firstAt();
+    const long long at1 = ext.secondAt();
+    const double xExt0 = sampleX(times, at0, indexStart, indexStep);
+    const double xExt1 = sampleX(times, at1, indexStart, indexStep);
+
+    const long long prev = first - 1;
+    if (prev >= 0) {
+        double yPrev = 0.0;
+        if (yAt(pyramid, row, count, prev, yPrev)) {
+            const double xPrev = sampleX(times, prev, indexStart, indexStep);
+            const int cPrev = columnIndex(edges, xPrev, xLog, edges.front(), invWidth, columns);
+            if (cPrev < 0 || c - cPrev <= 1) {
+                emitPoint(out, t0, lerpY(xPrev, yPrev, xExt0, ext.first(), t0));
+            }
+        }
+    }
+
+    emitPoint(out, xExt0, ext.first());
+    if (at0 != at1) {
+        emitPoint(out, xExt1, ext.second());
+    }
+
+    if (lastEx < count) {
+        double yNext = 0.0;
+        if (yAt(pyramid, row, count, lastEx, yNext)) {
+            const double xNext = sampleX(times, lastEx, indexStart, indexStep);
+            const int cNext = columnIndex(edges, xNext, xLog, edges.front(), invWidth, columns);
+            if (cNext < 0 || cNext - c <= 1) {
+                emitPoint(out, t1, lerpY(xExt1, ext.second(), xNext, yNext, t1));
+            }
+        }
+    }
     return true;
 }
 
@@ -124,11 +221,11 @@ void columnEdges(double xMin, double xMax, int columns, bool xLog, std::vector<d
 
 int columnOf(std::span<const double> edges, double x)
 {
+    // Public helper: no linear/log flag, so bisect. The hot path inside
+    // rasterColumns uses columnIndex with division on a linear axis.
     if (edges.size() < 2 || !std::isfinite(x) || x < edges.front() || x > edges.back()) {
         return -1;
     }
-    // The last edge is inclusive so a sample sitting on xMax (the usual full
-    // view for an index axis) still belongs to the last column.
     if (x == edges.back()) {
         return static_cast<int>(edges.size()) - 2;
     }
@@ -162,65 +259,9 @@ bool rasterColumns(const LinePyramid& pyramid, const double* raw, long long coun
     }
 
     const double* row = rawRow(pyramid, raw, count);
-
-    // Restrict the walk to samples that can meet the view (plus one either
-    // side for entry/exit). A full scan of a hundred-million-element line on
-    // every pan would be the cost the pyramid exists to avoid.
-    long long walkFirst = 0;
-    long long walkLast = count;
-    if (!times.empty()) {
-        const auto begin = times.begin();
-        const auto end = times.end();
-        walkFirst = static_cast<long long>(std::lower_bound(begin, end, edges.front()) - begin);
-        walkLast = static_cast<long long>(std::upper_bound(begin, end, edges.back()) - begin);
-    } else {
-        const double lo = (edges.front() - indexStart) / indexStep;
-        const double hi = (edges.back() - indexStart) / indexStep;
-        double a = lo;
-        double b = hi;
-        if (indexStep < 0.0) {
-            std::swap(a, b);
-        }
-        walkFirst = static_cast<long long>(std::floor(a));
-        walkLast = static_cast<long long>(std::floor(b)) + 1;
-    }
-    walkFirst = std::clamp(walkFirst - 1, 0LL, count);
-    walkLast = std::clamp(walkLast + 1, 0LL, count);
-
-    struct ColumnInfo
-    {
-        long long first = -1;
-        long long last = -1;
-        int samples = 0;
-        Extremes extremes;
-    };
-    std::vector<ColumnInfo> cols(static_cast<std::size_t>(columns));
-
-    // Walk the in-view run once. O(visible samples + columns).
-    for (long long i = walkFirst; i < walkLast; ++i) {
-        const double x = sampleX(times, i, indexStart, indexStep);
-        if (!std::isfinite(x)) {
-            continue;
-        }
-        const int c = columnOf(edges, x);
-        if (c < 0) {
-            continue;
-        }
-        ColumnInfo& col = cols[static_cast<std::size_t>(c)];
-        if (col.first < 0) {
-            col.first = i;
-        }
-        col.last = i;
-        ++col.samples;
-    }
-
-    // Extrema per column: raw walk when held, else the pyramid over the run.
-    for (ColumnInfo& col : cols) {
-        if (col.samples < 2 || col.first < 0) {
-            continue;
-        }
-        col.extremes = extremesIn(pyramid, row, count, col.first, col.last + 1);
-    }
+    const double span = edges.back() - edges.front();
+    const double invWidth =
+        (!xLog && span > 0.0) ? static_cast<double>(columns) / span : 0.0;
 
     auto appendSample = [&](long long i) {
         double y = 0.0;
@@ -230,63 +271,65 @@ bool rasterColumns(const LinePyramid& pyramid, const double* raw, long long coun
         emitPoint(out, sampleX(times, i, indexStart, indexStep), y);
     };
 
+    // Negative index step: x decreases with i. Column ranges are still
+    // ascending in x, so map each sample by columnIndex instead of inverting
+    // the affine. Rare (stated axes run forward); keep it correct, not hot.
+    if (times.empty() && indexStep < 0.0) {
+        struct ColumnInfo
+        {
+            long long first = -1;
+            long long last = -1;
+            int samples = 0;
+        };
+        std::vector<ColumnInfo> cols(static_cast<std::size_t>(columns));
+        for (long long i = 0; i < count; ++i) {
+            const double x = sampleX(times, i, indexStart, indexStep);
+            const int c = columnIndex(edges, x, xLog, edges.front(), invWidth, columns);
+            if (c < 0) {
+                continue;
+            }
+            ColumnInfo& col = cols[static_cast<std::size_t>(c)];
+            if (col.first < 0) {
+                col.first = i;
+            }
+            col.last = i;
+            ++col.samples;
+        }
+        for (int c = 0; c < columns; ++c) {
+            const ColumnInfo& col = cols[static_cast<std::size_t>(c)];
+            if (col.samples <= 0 || col.first < 0) {
+                continue;
+            }
+            if (col.samples == 1) {
+                appendSample(col.first);
+                continue;
+            }
+            emitSummarised(pyramid, row, count, times, indexStart, indexStep, edges, xLog, invWidth,
+                           columns, c, col.first, col.last + 1, out);
+        }
+        return !out.values.empty();
+    }
+
+    // Per column: index range by bisect/arithmetic, then extrema from the
+    // pyramid (wide) or a short raw run (narrow). O(columns · log n), not
+    // O(visible samples).
     for (int c = 0; c < columns; ++c) {
-        const ColumnInfo& col = cols[static_cast<std::size_t>(c)];
         const double t0 = edges[static_cast<std::size_t>(c)];
         const double t1 = edges[static_cast<std::size_t>(c) + 1];
+        const bool lastCol = (c + 1 == columns);
 
-        if (col.samples <= 0 || col.first < 0) {
+        const long long first = firstAtLeast(times, count, indexStart, indexStep, t0);
+        const long long lastEx = lastCol ? firstAfter(times, count, indexStart, indexStep, t1)
+                                         : firstAtLeast(times, count, indexStart, indexStep, t1);
+        if (lastEx <= first) {
             continue;
         }
-
-        if (col.samples == 1) {
-            // Zero or one sample per column: polyline through the sample.
-            appendSample(col.first);
+        if (lastEx - first == 1) {
+            appendSample(first);
             continue;
         }
-
-        // Several samples: entry → extrema (occurrence order) → exit.
-        out.summarised = true;
-        if (!col.extremes.found()) {
-            continue;
-        }
-
-        const long long at0 = col.extremes.firstAt();
-        const long long at1 = col.extremes.secondAt();
-        const double xExt0 = sampleX(times, at0, indexStart, indexStep);
-        const double xExt1 = sampleX(times, at1, indexStart, indexStep);
-
-        const long long prev = col.first - 1;
-        if (prev >= 0) {
-            double yPrev = 0.0;
-            if (yAt(pyramid, row, count, prev, yPrev)) {
-                const double xPrev = sampleX(times, prev, indexStart, indexStep);
-                const int cPrev = columnOf(edges, xPrev);
-                // More than one column between samples → plain chord; no edge
-                // entry. Adjacent / off-pane → entry from prev toward the first
-                // extreme, so the previous column follows the true slope.
-                if (cPrev < 0 || c - cPrev <= 1) {
-                    emitPoint(out, t0, lerpY(xPrev, yPrev, xExt0, col.extremes.first(), t0));
-                }
-            }
-        }
-
-        emitPoint(out, xExt0, col.extremes.first());
-        if (at0 != at1) {
-            emitPoint(out, xExt1, col.extremes.second());
-        }
-
-        const long long next = col.last + 1;
-        if (next < count) {
-            double yNext = 0.0;
-            if (yAt(pyramid, row, count, next, yNext)) {
-                const double xNext = sampleX(times, next, indexStart, indexStep);
-                const int cNext = columnOf(edges, xNext);
-                if (cNext < 0 || cNext - c <= 1) {
-                    emitPoint(out, t1, lerpY(xExt1, col.extremes.second(), xNext, yNext, t1));
-                }
-            }
-        }
+        emitSummarised(pyramid, row, count, times, indexStart, indexStep, edges, xLog, invWidth,
+                       columns, c, first, lastEx, out);
     }
 
     return !out.values.empty();
