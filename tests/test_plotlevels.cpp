@@ -881,8 +881,9 @@ TEST_CASE("a logarithmic pane is folded one envelope per column, from the first 
 
     REQUIRE(fold.values.size() == fold.positions.size());
     CHECK(fold.summarised);
-    // Two values a column: the extremes, the crossing at each edge included,
-    // each where it occurred. Narrower than that, the samples themselves.
+    // Two values a column: the extremes, at the samples they occurred at.
+    // Narrower than that, the samples themselves. A crossing at the edge is
+    // not one of those samples.
     CHECK(fold.values.size() <= 2 * edges.size());
     CHECK(fold.values.size() <= 16 * static_cast<std::size_t>(kColumns) + 2);
     REQUIRE(std::is_sorted(fold.positions.begin(), fold.positions.end()));
@@ -951,68 +952,15 @@ TEST_CASE("a logarithmic pane is folded one envelope per column, from the first 
                 }
                 continue;
             }
-            REQUIRE(at < fold.values.size());
-            // The two extremes after each edge's crossing has joined them,
-            // each at the position it occurred at.
-            double low = 0.0;
-            double high = 0.0;
-            double lowAt = 0.0;
-            double highAt = 0.0;
-            bool have = false;
-            const auto offer = [&](double where, double value) {
-                if (!std::isfinite(where) || !std::isfinite(value)) {
-                    return;
-                }
-                if (!have) {
-                    low = high = value;
-                    lowAt = highAt = where;
-                    have = true;
-                    return;
-                }
-                if (value < low) {
-                    low = value;
-                    lowAt = where;
-                }
-                else if (value > high) {
-                    high = value;
-                    highAt = where;
-                }
-            };
-            const auto crossing = [&](double edge) {
-                const auto left = static_cast<long long>(std::floor(edge));
-                if (left < 0 || left >= kLength) {
-                    return;
-                }
-                const double a = line[static_cast<std::size_t>(left)];
-                if (static_cast<double>(left) == edge || left + 1 >= kLength) {
-                    offer(edge, a);
-                    return;
-                }
-                const double b = line[static_cast<std::size_t>(left + 1)];
-                if (!std::isfinite(a) || !std::isfinite(b)) {
-                    return;
-                }
-                const double t = edge - static_cast<double>(left);
-                offer(edge, a + t * (b - a));
-            };
-            offer(static_cast<double>(want.firstAt()), want.first());
-            offer(static_cast<double>(want.secondAt()), want.second());
-            crossing(edges[c]);
-            crossing(edges[c + 1]);
-            REQUIRE(have);
+            REQUIRE(want.found());
             REQUIRE(at + 2 <= fold.values.size());
-            if (lowAt <= highAt) {
-                CHECK(fold.values[at] == low);
-                CHECK(fold.values[at + 1] == high);
-                CHECK(fold.positions[at] == lowAt);
-                CHECK(fold.positions[at + 1] == highAt);
-            }
-            else {
-                CHECK(fold.values[at] == high);
-                CHECK(fold.values[at + 1] == low);
-                CHECK(fold.positions[at] == highAt);
-                CHECK(fold.positions[at + 1] == lowAt);
-            }
+            // The extremes, in the order they occurred. A crossing at the
+            // column edge is not an element: on a line whose value is its
+            // index it is a fraction, and the fold is checked against the file.
+            CHECK(fold.values[at] == want.first());
+            CHECK(fold.values[at + 1] == want.second());
+            CHECK(fold.positions[at] == static_cast<double>(want.firstAt()));
+            CHECK(fold.positions[at + 1] == static_cast<double>(want.secondAt()));
             at += 2;
         }
         CHECK(at == fold.values.size());
