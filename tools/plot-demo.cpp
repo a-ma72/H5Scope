@@ -31,8 +31,12 @@ int main(int argc, char* argv[])
     }
     values[static_cast<std::size_t>(kCount / 2)] = 8.0;
 
-    auto* store = new gui::LineStore;
-    store->addLine(values.data(), static_cast<qsizetype>(values.size()));
+    // The widget clears its callback in its destructor. The store is a local
+    // declared first, so that destructor runs while the store is still alive.
+    // The raw samples above outlive the store for the same reason: they are
+    // borrowed, and the pyramid is the copy.
+    gui::LineStore store;
+    store.addLine(values.data(), static_cast<qsizetype>(values.size()));
 
     QWidget window;
     window.setWindowTitle(QStringLiteral("plotcore demo"));
@@ -46,8 +50,7 @@ int main(int argc, char* argv[])
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(plot, 1);
     layout->addWidget(logY);
-    plot->setStore(store);
-    store->setParent(&window);
+    plot->setStore(&store);
 
     window.show();
     return QApplication::exec();

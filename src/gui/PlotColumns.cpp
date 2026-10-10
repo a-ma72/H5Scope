@@ -12,16 +12,19 @@
 namespace gui {
 namespace {
 
-/// Prefer the pyramid once a column holds at least this many samples. Below
-/// that a raw walk is a handful of doubles already in cache; above it the
-/// pyramid answers in O(log n) instead of O(samples).
-constexpr int kPyramidPrefer = 32;
-
 /// Log-y: exact positive-run split (raw scan) only while a column is this
 /// short. Wider columns probe the pyramid in O(probes) steps and merge
 /// all-positive spans — dense sine lobes stay gapped without an O(n) walk.
 constexpr int kLogYExact = 64;
 constexpr int kLogYProbes = 48;
+
+/// First and last sample index that landed in a column during a single pass.
+struct ColumnInfo
+{
+    long long first = -1;
+    long long last = -1;
+    int samples = 0;
+};
 
 double sampleX(std::span<const double> times, long long i, double indexStart, double indexStep)
 {
@@ -151,16 +154,41 @@ long long firstAfter(std::span<const double> times, long long count, double inde
     return std::clamp(static_cast<long long>(std::floor(at + 1e-15)) + 1, 0LL, count);
 }
 
+/// Raw in hand: sequential scan (Famos-sized lines stay under a millisecond).
+/// No raw: pyramid extremesOver — the path that still answers when the base
+/// bucket is coarser than one sample.
 Extremes extremesFor(const LinePyramid& pyramid, const double* raw, long long first, long long last)
 {
     if (first >= last) {
         return {};
     }
-    const long long n = last - first;
-    if (raw != nullptr && n < kPyramidPrefer) {
+    if (raw != nullptr) {
         return extremesOf(raw, first, last);
     }
     return extremesOver(pyramid, first, last);
+}
+
+/// Assign every sample whose x falls in the pane to a column. One pass over
+/// `[i0, i1)` — used for both ascending and descending index axes so the
+/// column spans are the samples that actually land there, not W edge bisects.
+void fillColumnSpans(std::span<const double> times, long long i0, long long i1, double indexStart,
+                     double indexStep, std::span<const double> edges, bool xLog, double invWidth,
+                     int columns, std::vector<ColumnInfo>& cols)
+{
+    cols.assign(static_cast<std::size_t>(columns), {});
+    for (long long i = i0; i < i1; ++i) {
+        const double x = sampleX(times, i, indexStart, indexStep);
+        const int c = columnIndex(edges, x, xLog, edges.front(), invWidth, columns);
+        if (c < 0) {
+            continue;
+        }
+        ColumnInfo& col = cols[static_cast<std::size_t>(c)];
+        if (col.first < 0) {
+            col.first = i;
+        }
+        col.last = i;
+        ++col.samples;
+    }
 }
 
 /// Gap when the next drawable sample is not adjacent to the last one — covers
@@ -370,7 +398,7 @@ bool emitSummarised(const LinePyramid& pyramid, const double* row, long long cou
         return false; // nothing drawable
     }
     if (whole.lowest > 0.0) {
-        // Entire column positive: one envelope, O(log n).
+        // Entire column positive: one envelope (raw scan or pyramid).
         return emitRun(pyramid, row, count, times, indexStart, indexStep, edges, xLog, true,
                        invWidth, columns, c, first, lastEx, whole, true, true, lastDrawable, out);
     }
@@ -479,51 +507,24 @@ bool rasterColumns(const LinePyramid& pyramid, const double* raw, long long coun
                        invWidth, columns, c, first, lastEx, lastDrawable, out);
     };
 
-    if (times.empty() && indexStep < 0.0) {
-        struct ColumnInfo
-        {
-            long long first = -1;
-            long long last = -1;
-            int samples = 0;
-        };
-        std::vector<ColumnInfo> cols(static_cast<std::size_t>(columns));
-        for (long long i = 0; i < count; ++i) {
-            const double x = sampleX(times, i, indexStart, indexStep);
-            const int c = columnIndex(edges, x, xLog, edges.front(), invWidth, columns);
-            if (c < 0) {
-                continue;
-            }
-            ColumnInfo& col = cols[static_cast<std::size_t>(c)];
-            if (col.first < 0) {
-                col.first = i;
-            }
-            col.last = i;
-            ++col.samples;
-        }
-        for (int c = 0; c < columns; ++c) {
-            const ColumnInfo& col = cols[static_cast<std::size_t>(c)];
-            if (col.samples <= 0 || col.first < 0) {
-                continue;
-            }
-            emitColumn(c, col.first, col.last + 1);
-        }
-        // Trailing NaN gaps are not drawable content.
-        while (!out.values.empty() && !std::isfinite(out.values.back())) {
-            out.values.pop_back();
-            out.xs.pop_back();
-        }
-        return !out.values.empty();
+    // One pass over the samples that can hit the pane. Ascending x (index step
+    // or sorted times) bounds the walk with two edge lookups; a descending
+    // index axis walks the whole line (columnIndex rejects what falls outside).
+    long long i0 = 0;
+    long long i1 = count;
+    if ((!times.empty()) || indexStep > 0.0) {
+        i0 = firstAtLeast(times, count, indexStart, indexStep, edges.front());
+        i1 = firstAfter(times, count, indexStart, indexStep, edges.back());
     }
 
+    std::vector<ColumnInfo> cols;
+    fillColumnSpans(times, i0, i1, indexStart, indexStep, edges, xLog, invWidth, columns, cols);
     for (int c = 0; c < columns; ++c) {
-        const double t0 = edges[static_cast<std::size_t>(c)];
-        const double t1 = edges[static_cast<std::size_t>(c) + 1];
-        const bool lastCol = (c + 1 == columns);
-
-        const long long first = firstAtLeast(times, count, indexStart, indexStep, t0);
-        const long long lastEx = lastCol ? firstAfter(times, count, indexStart, indexStep, t1)
-                                         : firstAtLeast(times, count, indexStart, indexStep, t1);
-        emitColumn(c, first, lastEx);
+        const ColumnInfo& col = cols[static_cast<std::size_t>(c)];
+        if (col.samples <= 0 || col.first < 0) {
+            continue;
+        }
+        emitColumn(c, col.first, col.last + 1);
     }
 
     while (!out.values.empty() && !std::isfinite(out.values.back())) {

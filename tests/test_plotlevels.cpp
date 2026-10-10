@@ -1474,3 +1474,70 @@ TEST_CASE("a dense logarithmic y column probes positive runs without inventing v
     }
     CHECK(runs == 2);
 }
+
+TEST_CASE("wide columns with raw match the base-1 pyramid stroke", "[levels][columns]")
+{
+    // samples/column ≫ the old kPyramidPrefer (32): raw must stay on the
+    // sequential scan and agree with the stroke that only has the pyramid
+    // (rawRow then borrows base-1).
+    constexpr int kCount = 10'000;
+    constexpr int kColumns = 10; // 1000 samples per column
+    std::vector<double> line(static_cast<std::size_t>(kCount));
+    for (int i = 0; i < kCount; ++i) {
+        line[static_cast<std::size_t>(i)] = static_cast<double>(i);
+    }
+    line[4'000] = 1.0e6; // spike that must survive either path
+    const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), kCount, 1);
+
+    gui::ColumnStroke withRaw;
+    gui::ColumnStroke pyramidOnly;
+    REQUIRE(gui::rasterColumns(pyramid, line.data(), kCount, {}, 0.0,
+                               static_cast<double>(kCount - 1), kColumns, false, false, withRaw));
+    REQUIRE(gui::rasterColumns(pyramid, nullptr, kCount, {}, 0.0, static_cast<double>(kCount - 1),
+                               kColumns, false, false, pyramidOnly));
+
+    REQUIRE(withRaw.values.size() == pyramidOnly.values.size());
+    REQUIRE(withRaw.xs.size() == pyramidOnly.xs.size());
+    CHECK(withRaw.summarised);
+    CHECK(pyramidOnly.summarised);
+    for (std::size_t i = 0; i < withRaw.values.size(); ++i) {
+        CHECK(withRaw.values[i] == Approx(pyramidOnly.values[i]));
+        CHECK(withRaw.xs[i] == Approx(pyramidOnly.xs[i]));
+    }
+    CHECK(std::any_of(withRaw.values.begin(), withRaw.values.end(),
+                      [](double y) { return y == 1.0e6; }));
+}
+
+TEST_CASE("a descending index axis still folds by a single sample pass", "[levels][columns]")
+{
+    std::vector<double> line(100);
+    for (int i = 0; i < 100; ++i) {
+        line[static_cast<std::size_t>(i)] = static_cast<double>(i);
+    }
+    line[50] = 99.0;
+    const gui::LinePyramid pyramid = gui::pyramidOf(line.data(), 100, 1);
+    gui::ColumnStroke stroke;
+    // x = 99 - i: sample 0 at the right edge, sample 99 at the left.
+    REQUIRE(gui::rasterColumns(pyramid, line.data(), 100, {}, 99.0, -1.0, 0.0, 99.0, 10, false,
+                               false, stroke));
+    REQUIRE_FALSE(stroke.values.empty());
+    CHECK(stroke.summarised);
+    CHECK(std::any_of(stroke.values.begin(), stroke.values.end(),
+                      [](double y) { return y == 99.0; }));
+}
+
+TEST_CASE("uneven times single-pass matches edge-bounded column membership",
+          "[levels][columns]")
+{
+    // Many columns, sparse times: every finite y in the stroke must be a
+    // sample whose time falls in the pane, and the spike at t=10 must appear.
+    const std::vector<double> y{0.0, 1.0, 0.0, 2.0, 0.0, 3.0, 0.0};
+    const std::vector<double> t{0.0, 1.0, 2.0, 10.0, 11.0, 20.0, 21.0};
+    const gui::LinePyramid pyramid = gui::pyramidOf(y.data(), 7, 1);
+    gui::ColumnStroke stroke;
+    REQUIRE(gui::rasterColumns(pyramid, y.data(), 7, t, 0.0, 21.0, 7, false, false, stroke));
+    CHECK(std::any_of(stroke.values.begin(), stroke.values.end(),
+                      [](double v) { return v == 2.0; }));
+    CHECK(std::any_of(stroke.values.begin(), stroke.values.end(),
+                      [](double v) { return v == 3.0; }));
+}

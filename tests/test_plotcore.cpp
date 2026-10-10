@@ -89,7 +89,7 @@ TEST_CASE("a closer look is a run of the line, not a stretch of the summary", "[
     // covered the whole line. If the zoom had only stretched the summary,
     // both pointers would be the same buffer.
     REQUIRE(close.data() != whole.data());
-    REQUIRE(close.size() < whole.size() || close.size() < 400);
+    REQUIRE((close.size() < whole.size() || close.size() < 400));
 }
 
 TEST_CASE("clearLines empties the widget it last filled", "[plotcore]")
