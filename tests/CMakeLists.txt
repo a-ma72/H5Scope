@@ -83,8 +83,12 @@ catch_discover_tests(test_plotlevels)
 # what lets that happen on a machine with no display.
 qt_add_executable(test_plotcore test_plotcore.cpp)
 target_link_libraries(test_plotcore PRIVATE plotcore Catch2::Catch2WithMain)
-qt_import_plugins(test_plotcore INCLUDE Qt6::QOffscreenIntegrationPlugin)
-catch_discover_tests(test_plotcore PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# Fusion as well as offscreen. QApplication on Windows asks for the Vista
+# style while it is being constructed, and a static build only has the styles
+# that were imported. The missing one is an access violation, not a fallback.
+qt_import_plugins(test_plotcore INCLUDE Qt6::QOffscreenIntegrationPlugin Qt6::QFusionStylePlugin)
+catch_discover_tests(test_plotcore PROPERTIES
+  ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_STYLE_OVERRIDE=Fusion")
 
 # --- the custom plot tabs -------------------------------------------------
 # Its own suite rather than more of test_models: what it covers is one feature

@@ -31,13 +31,33 @@ using Catch::Approx;
 
 namespace {
 
+/// Before QApplication exists. A static Qt on Windows asks for the Vista
+/// style as it constructs the application, and that style is a plugin this
+/// binary does not have -- the lookup is an access violation, which is why
+/// these three cases died and every other case in the process did not. Fusion
+/// is the one the offscreen plugin can actually draw with. The platform is
+/// set here as well as by ctest, so running the binary by hand does the same.
+const bool kHeadless = [] {
+    if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
+        qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
+    }
+    if (qEnvironmentVariableIsEmpty("QT_STYLE_OVERRIDE")) {
+        qputenv("QT_STYLE_OVERRIDE", QByteArrayLiteral("Fusion"));
+    }
+    return true;
+}();
+
 QApplication& qt()
 {
+    (void)kHeadless;
     static int argc = 1;
     static char arg0[] = "test_plotcore";
     static char* argv[] = {arg0, nullptr};
-    static QApplication app(argc, argv);
-    return app;
+    // Leaked. Destroying the application at exit tears the platform plugin
+    // down after the colour table and the thread pool, and that is a crash
+    // on Windows. The process is a test; it does not need the shutdown.
+    static auto* app = new QApplication(argc, argv);
+    return *app;
 }
 
 std::vector<double> impulse(int count, int at, double spike)
