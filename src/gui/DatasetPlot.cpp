@@ -1161,24 +1161,16 @@ void DatasetPlot::refreshDetail()
     // whose exit is a policy in another file is a loop worth bounding here.
     bool filled = false;
 
-    // The pane's own preferred run first, whether or not something coarser in
-    // hand would already have covered it.
+    // The pane's own run first, at the bucket the pane asked for.
     //
-    // wantedLevel() stops asking once *some* held run covers the view at a
-    // bucket no coarser than the pane strictly needs, and that was the right
-    // rule while every run cost a round trip: a run read on the way in is
-    // usually a little finer than the next view out needs, and re-reading the
-    // file to gain a fraction of an octave would have been a round trip spent
-    // on almost nothing. The cost of settling for it is that the pane can be
-    // drawn at up to an octave coarser than it asked -- about one drawn station
-    // per column where it asked for two, which is what kSamplesPerColumn's
-    // slack absorbs.
-    //
-    // Out of a held line that trade has no second side. The finer run is a fold
-    // of a buffer already in hand, so there is nothing to weigh against it, and
-    // the pane gets the resolution it asked for on every frame rather than on
-    // the frames where the ladder happens to line up.
-    if (const std::optional<PlotWindow> own = detailFor(detailBuckets());
+    // detailBuckets() is an octave finer, and wantedLevel() asks for that one
+    // only while nothing held covers the view. Filling it here would make it
+    // the finest covering run, which is the one that is drawn -- a view of
+    // four thousand elements would come back at a step of one instead of two.
+    // Once this run is in hand the view is answered, so the octave finer is
+    // not fetched for it. The next step in is a narrower window, folded from
+    // the pyramid when the pane asks, and that is still not a read.
+    if (const std::optional<PlotWindow> own = detailFor(paneBuckets());
         own.has_value() && fillDetail(*own)) {
         filled = true;
         trimLevels();

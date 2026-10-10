@@ -1964,7 +1964,10 @@ void CustomPlot::refreshCloser()
     // hand would have covered it -- see the note there; out of a held line the
     // finer fold has nothing to weigh against it.
     for (Entry& entry : entries_) {
-        if (const std::optional<PlotWindow> own = closerFor(entry, closerBuckets());
+        // The pane's bucket, for DatasetPlot::refreshDetail's reason: the
+        // octave finer is the next step, and drawing it now answers this one
+        // a step ahead of the pane.
+        if (const std::optional<PlotWindow> own = closerFor(entry, bucketBudget());
             own.has_value() && fillCloser(entry, *own)) {
             filled = true;
         }

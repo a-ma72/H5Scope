@@ -1173,6 +1173,28 @@ std::span<const double> LineStore::drawnValues(int index) const
         return entry.foldValues;
     }
     if (entry.closerValid && !entry.closer.empty()) {
+        // The run is twice the pane, so a pan still has data in hand. What is
+        // drawn is the part the window asked for: the prefetch either side is
+        // not on screen, and a count of the whole run is a count of the next
+        // pan rather than of this picture.
+        if (asked_ && entry.closerStep > 0.0) {
+            const double low = std::min(viewMin_, viewMax_);
+            const double high = std::max(viewMin_, viewMax_);
+            std::size_t begin = entry.closer.size();
+            std::size_t end = 0;
+            for (std::size_t i = 0; i < entry.closer.size(); ++i) {
+                const double at = static_cast<double>(entry.closerWindow.first) +
+                                  static_cast<double>(i) * entry.closerStep;
+                if (at < low || at > high) {
+                    continue;
+                }
+                begin = std::min(begin, i);
+                end = i + 1;
+            }
+            if (begin < end) {
+                return std::span<const double>(entry.closer.data() + begin, end - begin);
+            }
+        }
         return entry.closer;
     }
     return entry.whole;

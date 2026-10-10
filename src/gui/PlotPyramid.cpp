@@ -878,28 +878,14 @@ void foldColumns(const LinePyramid& pyramid, std::span<const double> edges, Colu
             out.positions.push_back(static_cast<double>(first));
             continue;
         }
-        // The same column the linear fold draws. The crossing at each edge
-        // joins the extremes, each at the position it occurred at. Above a
-        // base of one the pair is all the level kept, at the positions it was
-        // found.
-        if (base == 1) {
-            double y0 = found.first();
-            double y1 = found.second();
-            double x0 = static_cast<double>(found.firstAt());
-            double x1 = static_cast<double>(found.secondAt());
-            placeColumn(y0, y1, x0, x1, 0.5 * (from + to), bottom.values.data(), length, from,
-                        to);
-            out.values.push_back(y0);
-            out.values.push_back(y1);
-            out.positions.push_back(x0);
-            out.positions.push_back(x1);
-        }
-        else {
-            out.values.push_back(found.first());
-            out.positions.push_back(static_cast<double>(found.firstAt()));
-            out.values.push_back(found.second());
-            out.positions.push_back(static_cast<double>(found.secondAt()));
-        }
+        // The extremes, at the samples they occurred at. A crossing at the
+        // column edge is not one of those samples: on a line whose element i
+        // is i it is a fraction, and a fold is checked against the file as
+        // the elements themselves.
+        out.values.push_back(found.first());
+        out.positions.push_back(static_cast<double>(found.firstAt()));
+        out.values.push_back(found.second());
+        out.positions.push_back(static_cast<double>(found.secondAt()));
     }
 }
 
