@@ -595,23 +595,26 @@ private:
     bool xLog_ = false;
     bool yLog_ = false;
 
-    /// Every drawn line folded onto the pane's pixel columns. See
-    /// LogColumns / LinearColumns and PlotColumns.
+    /// Every drawn line folded onto the pane's columns, on a logarithmic x
+    /// that spans an octave or more. See LogColumns.
     ///
     /// Beside the whole-line summary and the runs rather than instead of
-    /// them. On a log axis it answers only for a view spanning an octave or
-    /// more; under that, the runs are what is drawn. The held grid covers the
-    /// view plus a half-pane margin so a pan inside that margin keeps the
-    /// stroke. Both maps are borrowed by the renderer on the terms `lines_`
-    /// is, keyed as it is, and pruned and retired with it.
+    /// them. Under an octave, and on a linear axis, the runs are what is
+    /// drawn: a column stroke there has no position step, and the closer look
+    /// is the reading a zoom asks for. The held grid covers the view plus a
+    /// half-pane margin so a pan inside that margin keeps the fold. The maps
+    /// are borrowed by the renderer on the terms `lines_` is, keyed as it is,
+    /// and pruned and retired with it.
     struct LogFold
     {
-        /// Axis + pane + column grid this stroke was built for.
+        /// Axis + pane + column grid this fold was built for.
         LogFoldGrid grid;
         double viewMin = 0.0;
         double viewMax = 0.0;
         bool yLog = false;
         bool armed = false;
+        /// Column edges as positions along the line, shared by every series.
+        std::vector<double> edges;
         std::map<int, std::vector<double>> values;
         std::map<int, std::vector<double>> xs;
         std::map<int, bool> summarised;

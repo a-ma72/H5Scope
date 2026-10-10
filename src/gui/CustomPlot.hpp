@@ -648,6 +648,11 @@ private:
     [[nodiscard]] double timeAt(long long at) const;
     /// Whether the time base, as held, runs one way; and which.
     [[nodiscard]] bool timeSorted(bool& ascending) const;
+    /// Column edges of a time base, as positions along a line stretched by
+    /// `scale`. A bisection of the held times: the fold then reads a run
+    /// between two of them, the same question an index axis answers by
+    /// division.
+    void timeEdges(const LogColumns& columns, double scale, std::vector<double>& out) const;
     /// Work out where the view and the focus fall in axis positions, once, for
     /// every entry to divide by its own scaling.
     ///

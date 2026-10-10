@@ -576,8 +576,8 @@ void LineStore::setVisibleRange(double xMin, double xMax)
     asked_ = true;
     askedMin_ = askedMin;
     askedMax_ = askedMax;
-    // Column strokes drop only when the held grid no longer serves the asked
-    // window (zoom, or pan past the margin). refreshColumnStroke decides.
+    // A logarithmic x keeps its column fold while the held grid still serves
+    // the window. Linear draws the closer look refreshCloser just built.
     refreshCloser();
     refreshColumnStroke();
     emitChanged();
@@ -586,17 +586,17 @@ void LineStore::setVisibleRange(double xMin, double xMax)
 void LineStore::fillInto(std::vector<PlotLine>& lines, PlotAxis& axis)
 {
     refreshColumnStroke();
-    // Column strokes carry their own x. A fold that did not land still needs
-    // times placed on the linear closer/whole path.
+    // A logarithmic fold already stated its own x. A linear line with its own
+    // time still has to: the shared axis is a different index.
     for (Entry& entry : lines_) {
         if (entry.foldValid) {
             continue;
         }
+        // Own time wins, and it is the only line that carries x of its own.
+        // A line on the shared clock is placed by that axis, sample for
+        // sample; stating x here makes it a second clock.
         if (entry.hasTime) {
             placeOwnTimes(entry);
-        }
-        else if (hasAxis_) {
-            placeTimes(entry, axis_);
         }
     }
     lines.clear();
@@ -668,7 +668,8 @@ void LineStore::rebuildWhole(Entry& entry)
         entry.wholeSummarised = false;
         return;
     }
-    // Positions stay for time bisection. Drawing uses refreshColumnStroke.
+    // Positions stay for time bisection and for placing a line's own time.
+    // A logarithmic x folds them again; a linear one draws this summary.
     if (positions.size() == entry.whole.size()) {
         entry.wholePositions = std::move(positions);
     }
@@ -930,6 +931,12 @@ double LineStore::timeAt(const Entry& time, long long at) const
 
 void LineStore::refreshColumnStroke()
 {
+    // Linear is the closer look. A column stroke there states its own x for
+    // every line, including one the shared clock is meant to place sample for
+    // sample, and a zoom stops being a run of the line.
+    if (!xLog_) {
+        return;
+    }
     double x0 = 0.0;
     double x1 = 0.0;
     if (asked_) {
@@ -1015,9 +1022,10 @@ PlotLine LineStore::lineOf(const Entry& entry) const
         }
     }
     // Stated x wins over the shared axis. xOf reads xs and never the position.
-    // Filled for a line's own time and for the shared clock, at the sample
-    // each point names.
-    if (line.values != nullptr && static_cast<qsizetype>(entry.placedXs.size()) == line.count) {
+    // Only a line with its own time carries that: the shared clock places the
+    // others, and an xs here would hide it.
+    if (entry.hasTime && line.values != nullptr &&
+        static_cast<qsizetype>(entry.placedXs.size()) == line.count) {
         line.xs = entry.placedXs.data();
     }
     return line;

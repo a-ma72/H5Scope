@@ -4,8 +4,8 @@
 #include "DatasetPlot.hpp"
 
 #include "gui/PlotBudget.hpp"
-#include "gui/PlotColumns.hpp"
 #include "gui/PlotLevels.hpp"
+#include "gui/PlotPyramid.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -681,26 +681,21 @@ void DatasetPlot::setYLog(bool logarithmic)
 
 std::optional<LogColumns> DatasetPlot::foldWanted() const
 {
-    // Column strokes cover linear and log. The optional is only a "wanted"
-    // signal for callers that still ask foldWanted — any finite view qualifies.
-    if (drawn_.empty() || static_cast<int>(drawn_.size()) > kWindowedSeries ||
-        !std::isfinite(xStart_) || !std::isfinite(xStep_) || !(std::abs(xStep_) > 0.0) ||
-        !std::isfinite(viewMin_) || !std::isfinite(viewMax_) || !(viewMax_ > viewMin_)) {
+    // Linear, and a log axis under an octave, are the closer look. A column
+    // stroke there replaces the position step the runs are drawn with, and a
+    // zoom stops resolving. logColumnsFor is the refusal: nothing under an
+    // octave, and nothing that is not a window on a log axis.
+    if (!xLog_ || drawn_.empty() || static_cast<int>(drawn_.size()) > kWindowedSeries ||
+        !std::isfinite(xStart_) || !std::isfinite(xStep_) || !(std::abs(xStep_) > 0.0)) {
         return {};
     }
-    // Log under an octave: no column grid — the closer runs take over.
-    if (xLog_) {
-        return logColumnsFor(viewMin_, viewMax_, paneBuckets());
-    }
-    // Linear: engaged optional; the value is unused (LinearColumns is built in
-    // remake). Sentinel keeps callers that still ask foldWanted working.
-    return LogColumns{};
+    return logColumnsFor(viewMin_, viewMax_, paneBuckets());
 }
 
 bool DatasetPlot::foldServes() const
 {
     return fold_.armed && fold_.yLog == yLog_ &&
-           fold_.grid.serves(xStart_, xStep_, xLog_ ? 1 : 0, paneBuckets(), viewMin_, viewMax_);
+           fold_.grid.serves(xStart_, xStep_, 0, paneBuckets(), viewMin_, viewMax_);
 }
 
 void DatasetPlot::dropFold() const
@@ -708,6 +703,7 @@ void DatasetPlot::dropFold() const
     retire(fold_.values);
     retire(fold_.xs);
     fold_.summarised.clear();
+    fold_.edges.clear();
     fold_.grid.clear();
     fold_.armed = false;
 }
@@ -718,27 +714,20 @@ bool DatasetPlot::foldedLine(int series, PlotLine& line) const
         return false;
     }
     if (!foldServes()) {
-        // Another view: zoom, pan past the margin, resize, scale, or axis.
-        // Retired rather than freed — the renderer is drawing the old stroke
-        // until handed this. A pan inside the held grid's margin keeps the
-        // stroke (foldServes), which is why a drag does not rebuild every frame.
+        // Another grid: a zoom that crossed an octave of density, a pan off the
+        // margin, or an axis that moved. Retired rather than freed, because the
+        // renderer is drawing the old one until it is handed this. A pan inside
+        // the margin keeps the fold, which is why a drag does not rebuild it.
         dropFold();
-        fold_.grid.remake(xStart_, xStep_, xLog_ ? 1 : 0, paneBuckets(), viewMin_, viewMax_,
-                          xLog_);
+        fold_.grid.remake(xStart_, xStep_, 0, paneBuckets(), viewMin_, viewMax_);
         fold_.viewMin = viewMin_;
         fold_.viewMax = viewMax_;
         fold_.yLog = yLog_;
-        fold_.armed = fold_.grid.columns.has_value() || fold_.grid.linear.has_value();
+        fold_.armed = fold_.grid.columns.has_value();
         if (!fold_.armed) {
             return false;
         }
-    }
-
-    double foldMin = 0.0;
-    double foldMax = 0.0;
-    int foldColumns = 0;
-    if (!fold_.grid.extent(foldMin, foldMax, foldColumns)) {
-        return false;
+        edgesAlong(*fold_.grid.columns, xStart_, xStep_, fold_.edges);
     }
 
     auto values = fold_.values.find(series);
@@ -747,17 +736,18 @@ bool DatasetPlot::foldedLine(int series, PlotLine& line) const
         if (pyramid == pyramids_.end() || pyramid->second.empty()) {
             return false;
         }
-        // Raw when the pyramid holds every element (base 1); otherwise the
-        // pyramid-only path. DatasetPlot never keeps a second copy of the row.
-        const double* raw = rawSamples(pyramid->second, nullptr, pyramid->second.length);
-        ColumnStroke stroke;
-        if (!rasterColumns(pyramid->second, raw, pyramid->second.length, {}, xStart_, xStep_,
-                           foldMin, foldMax, foldColumns, xLog_, yLog_, stroke)) {
-            return false;
+        // Extremes at the samples they occurred at. An edge lerp is not an
+        // element, and a drawn value has to be one: on this line the value is
+        // the index, and a point that is neither fails the file.
+        ColumnFold folded;
+        foldColumns(pyramid->second, fold_.edges, folded);
+        std::vector<double> xs(folded.positions.size());
+        for (std::size_t i = 0; i < xs.size(); ++i) {
+            xs[i] = xStart_ + folded.positions[i] * xStep_;
         }
-        fold_.xs[series] = std::move(stroke.xs);
-        fold_.summarised[series] = stroke.summarised;
-        values = fold_.values.insert_or_assign(series, std::move(stroke.values)).first;
+        fold_.xs[series] = std::move(xs);
+        fold_.summarised[series] = folded.summarised;
+        values = fold_.values.insert_or_assign(series, std::move(folded.values)).first;
     }
     const std::vector<double>& xs = fold_.xs[series];
     line.values = values->second.data();
@@ -797,8 +787,10 @@ PlotLine DatasetPlot::lineOf(int series) const
     ensure();
     PlotLine line;
 
-    // Pixel columns of the axis (linear or log). Index-bucket summaries below
-    // are the fallback when too many series are drawn for a column stroke.
+    // On a logarithmic axis spanning an octave or more, the line folded onto
+    // the pane's own columns -- and nothing below is asked. See LogColumns: the
+    // runs and the summary are bucketed by element, which on that axis is the
+    // wrong question for all but one part of the pane.
     if (foldedLine(series, line)) {
         return line;
     }

@@ -5,7 +5,6 @@
 
 #include "H5Session.hpp"
 #include "PlotBudget.hpp"
-#include "PlotColumns.hpp"
 #include "PlotLevels.hpp"
 #include "PlotPyramid.hpp"
 #include "h5core/Dataset.hpp"
@@ -1198,12 +1197,13 @@ std::optional<LogColumns> CustomPlot::foldWanted() const
     else if (!std::isfinite(xStart_) || !std::isfinite(xStep_) || !(std::abs(xStep_) > 0.0)) {
         return {};
     }
-    // Log under an octave: no column grid — closer runs take over.
-    if (xLog_) {
-        return logColumnsFor(viewMin_, viewMax_, bucketBudget());
+    // Linear, and a log axis under an octave, are the closer look. A column
+    // stroke there has no position step, so a stretched line and a time base
+    // stop being read where they are drawn. logColumnsFor is the refusal.
+    if (!xLog_) {
+        return {};
     }
-    // Linear: engaged sentinel; LinearColumns is built in remake.
-    return LogColumns{};
+    return logColumnsFor(viewMin_, viewMax_, bucketBudget());
 }
 
 bool CustomPlot::foldServes() const
@@ -1261,71 +1261,88 @@ bool CustomPlot::timeSorted(bool& ascending) const
     return sortedAnswer_ != 0;
 }
 
+void CustomPlot::timeEdges(const LogColumns& columns, double scale, std::vector<double>& out) const
+{
+    out.clear();
+    bool ascending = true;
+    if (!timeSorted(ascending) || !(scale > 0.0)) {
+        return;
+    }
+    const long long length = axis_.pyramid.length;
+    // How many elements lie before `x` in the order the time base runs:
+    // those below it when it ascends, those above it when it descends. A
+    // column's elements are then a run between two of these, which is what an
+    // edge is.
+    const auto before = [&](double x) {
+        long long low = 0;
+        long long high = length;
+        while (low < high) {
+            const long long mid = low + (high - low) / 2;
+            const double t = timeAt(mid);
+            if (ascending ? t < x : t >= x) {
+                low = mid + 1;
+            }
+            else {
+                high = mid;
+            }
+        }
+        return low;
+    };
+    out.reserve(static_cast<std::size_t>(columns.last - columns.first + 1));
+    for (long long k = columns.first; k <= columns.last; ++k) {
+        out.push_back(static_cast<double>(before(columns.edge(k))) / scale);
+    }
+    if (!ascending) {
+        std::reverse(out.begin(), out.end());
+    }
+}
+
 bool CustomPlot::foldedLine(const Entry& entry, PlotLine& line) const
 {
     if (entry.pyramid.empty() || !foldWanted().has_value()) {
         return false;
     }
     if (!foldServes()) {
-        // Another view past the held margin. Every entry's fold goes with the
-        // grid it was made on -- retired rather than freed, because the
-        // renderer is drawing them until it is handed these. A pan inside the
-        // margin keeps the stroke.
+        // Another grid. Every entry's fold goes with the one it was made on --
+        // retired rather than freed, because the renderer is drawing them
+        // until it is handed these. A pan inside the margin keeps the fold.
         dropFold();
         foldGrid_.remake(xStart_, xStep_, static_cast<int>(xMode_), bucketBudget(), viewMin_,
-                         viewMax_, xLog_);
+                         viewMax_);
         foldViewMin_ = viewMin_;
         foldViewMax_ = viewMax_;
         foldYLog_ = yLog_;
-        foldArmed_ = foldGrid_.columns.has_value() || foldGrid_.linear.has_value();
-        if (!foldArmed_) {
-            return false;
-        }
+        foldArmed_ = foldGrid_.columns.has_value();
     }
-    double foldMin = 0.0;
-    double foldMax = 0.0;
-    int foldColumns = 0;
-    if (!foldGrid_.extent(foldMin, foldMax, foldColumns)) {
+    if (!foldGrid_.columns.has_value()) {
         return false;
     }
     if (entry.foldGeneration != foldGeneration_) {
         retire(entry.foldValues);
         retire(entry.foldXs);
+        // An element of this entry sits at `scale` axis positions per
+        // element: one under Align, the axis over the line under Stretch.
         const double scale = stretchScale(entry);
-        // Raw when held at base 1, or when `values` is still the sample row
-        // (short line, stride 1). Summarised `values` must not be passed as raw.
-        const double* raw =
-            rawSamples(entry.pyramid,
-                       (!entry.summarised &&
-                        static_cast<long long>(entry.values.size()) == entry.pyramid.length)
-                           ? entry.values.data()
-                           : nullptr,
-                       entry.pyramid.length);
-        ColumnStroke stroke;
-        bool ok = false;
+        std::vector<double> edges;
         if (xMode_ == Dataset) {
-            // Time base as x. Needs the raw (or base-1) times in hand.
-            std::span<const double> times;
-            if (!axis_.pyramid.empty() && axis_.pyramid.baseBucket() == 1) {
-                times = axis_.pyramid.levels.front().values;
-            } else if (!axis_.values.empty() && !axis_.summarised) {
-                times = axis_.values;
-            }
-            if (!times.empty() && static_cast<long long>(times.size()) == entry.pyramid.length) {
-                ok = rasterColumns(entry.pyramid, raw, entry.pyramid.length, times, 0.0, 1.0,
-                                   foldMin, foldMax, foldColumns, xLog_, yLog_, stroke);
-            }
-        } else {
-            ok = rasterColumns(entry.pyramid, raw, entry.pyramid.length, {}, xStart_,
-                               xStep_ * scale, foldMin, foldMax, foldColumns, xLog_, yLog_, stroke);
+            timeEdges(*foldGrid_.columns, scale, edges);
         }
-        if (!ok) {
-            entry.foldGeneration = -1;
-            return false;
+        else {
+            edgesAlong(*foldGrid_.columns, xStart_, xStep_ * scale, edges);
         }
-        entry.foldValues = std::move(stroke.values);
-        entry.foldXs = std::move(stroke.xs);
-        entry.foldSummarised = stroke.summarised;
+        // Extremes at the samples they occurred at, then placed on the axis.
+        // A lerp at a column edge is not a time the file records, and a point
+        // drawn there is a reading of a sample that does not exist.
+        ColumnFold folded;
+        foldColumns(entry.pyramid, edges, folded);
+        std::vector<double> xs(folded.positions.size());
+        for (std::size_t i = 0; i < xs.size(); ++i) {
+            const double at = folded.positions[i] * scale;
+            xs[i] = xMode_ == Dataset ? timeAt(std::llround(at)) : xStart_ + at * xStep_;
+        }
+        entry.foldValues = std::move(folded.values);
+        entry.foldXs = std::move(xs);
+        entry.foldSummarised = folded.summarised;
         entry.foldGeneration = foldGeneration_;
     }
     line.values = entry.foldValues.data();
