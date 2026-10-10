@@ -30,6 +30,29 @@ namespace {
 // picture the data actually has.
 constexpr double kSamplesPerColumn = 4.0;
 
+// Index of `position` in a time base drawn at `start` + i * `step`.
+//
+// Rounding puts a position half a step past the last drawn time one past the
+// end, and that point is then dropped: the line no longer reaches the end of
+// the axis it was taken against. A position that has reached the *next*
+// sample is a different line, longer than the axis, and stays past the end.
+double timeIndex(double position, double start, double step, qsizetype count)
+{
+    if (!(std::abs(step) > 0.0) || count <= 0) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    const double exact = (position - start) / step;
+    double index = std::round(exact);
+    const double last = static_cast<double>(count - 1);
+    if (index > last && exact < static_cast<double>(count)) {
+        index = last;
+    }
+    if (index < 0.0 && exact > -1.0) {
+        index = 0.0;
+    }
+    return index;
+}
+
 // How far outside the pane a projected point is allowed to land.
 //
 // A sample does not stop existing because the reader zoomed past it: it is
@@ -195,7 +218,8 @@ double xOf(const PlotLine& line, const PlotAxis& axis, qsizetype at)
     // reaches this position: it is the same time base read finer, so it is the
     // same answer only sharper. See PlotAxis::closerValues.
     if (axis.hasCloser() && std::abs(axis.closerStep) > 0.0) {
-        const double at = std::round((position - axis.closerStart) / axis.closerStep);
+        const double at =
+            timeIndex(position, axis.closerStart, axis.closerStep, axis.closerCount);
         if (at >= 0.0 && at < static_cast<double>(axis.closerCount)) {
             const double x = axis.closerValues[static_cast<std::size_t>(at)];
             return std::isfinite(x) ? x : std::numeric_limits<double>::quiet_NaN();
@@ -204,7 +228,7 @@ double xOf(const PlotLine& line, const PlotAxis& axis, qsizetype at)
     if (!(std::abs(axis.valueStep) > 0.0)) {
         return std::numeric_limits<double>::quiet_NaN();
     }
-    const double index = std::round(position / axis.valueStep);
+    const double index = timeIndex(position, 0.0, axis.valueStep, axis.count);
     if (!(index >= 0.0) || !(index < static_cast<double>(axis.count))) {
         // Past the end of the time base. The line stops here rather than being
         // drawn against an x that does not exist, which is what "align" means

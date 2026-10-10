@@ -591,6 +591,7 @@ void h5plot_set_ylog(H5Plot* plot, int on)
     // window is taken first, in the data's own units, and put back after.
     const std::vector<HeldWindow> held = holdOwn(plot);
     plot->camera.setYLog(on != 0);
+    plot->store.setYLog(on != 0);
     restoreOwn(plot, held);
 }
 

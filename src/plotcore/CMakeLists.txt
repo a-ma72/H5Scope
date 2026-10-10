@@ -16,6 +16,7 @@ add_library(plotcore STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/../gui/PlotProjection.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../gui/PlotLevels.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../gui/PlotPyramid.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../gui/PlotColumns.cpp"
   PlotWidget.cpp
   LineStore.cpp
   View.cpp

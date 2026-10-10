@@ -5,6 +5,7 @@
 
 #include "gui/PlotBudget.hpp"
 #include "gui/PlotLevels.hpp"
+#include "gui/PlotPyramid.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -251,6 +252,16 @@ void DatasetPlot::applyColumns()
     applyCap(cap);
     emit changed();
     refreshDetail();
+}
+
+void DatasetPlot::setYPerPixel(double value)
+{
+    // Kept for the QML/C API shape. Column strokes place entry/exit by
+    // geometry; a y-pixel tolerance is not part of that picture.
+    if (!(value > 0.0) || !std::isfinite(value)) {
+        value = 0.0;
+    }
+    yPerPixel_ = value;
 }
 
 void DatasetPlot::setPaneColumns(int columns)
@@ -658,8 +669,22 @@ void DatasetPlot::setXLog(bool logarithmic)
     refreshDetail();
 }
 
+void DatasetPlot::setYLog(bool logarithmic)
+{
+    if (yLog_ == logarithmic) {
+        return;
+    }
+    yLog_ = logarithmic;
+    dropFold();
+    emit changed();
+}
+
 std::optional<LogColumns> DatasetPlot::foldWanted() const
 {
+    // Linear, and a log axis under an octave, are the closer look. A column
+    // stroke there replaces the position step the runs are drawn with, and a
+    // zoom stops resolving. logColumnsFor is the refusal: nothing under an
+    // octave, and nothing that is not a window on a log axis.
     if (!xLog_ || drawn_.empty() || static_cast<int>(drawn_.size()) > kWindowedSeries ||
         !std::isfinite(xStart_) || !std::isfinite(xStep_) || !(std::abs(xStep_) > 0.0)) {
         return {};
@@ -669,7 +694,8 @@ std::optional<LogColumns> DatasetPlot::foldWanted() const
 
 bool DatasetPlot::foldServes() const
 {
-    return fold_.grid.serves(xStart_, xStep_, 0, paneBuckets(), viewMin_, viewMax_);
+    return fold_.armed && fold_.yLog == yLog_ &&
+           fold_.grid.serves(xStart_, xStep_, 0, paneBuckets(), viewMin_, viewMax_);
 }
 
 void DatasetPlot::dropFold() const
@@ -679,6 +705,7 @@ void DatasetPlot::dropFold() const
     fold_.summarised.clear();
     fold_.edges.clear();
     fold_.grid.clear();
+    fold_.armed = false;
 }
 
 bool DatasetPlot::foldedLine(int series, PlotLine& line) const
@@ -689,10 +716,15 @@ bool DatasetPlot::foldedLine(int series, PlotLine& line) const
     if (!foldServes()) {
         // Another grid: a zoom that crossed an octave of density, a pan off the
         // margin, or an axis that moved. Retired rather than freed, because the
-        // renderer is drawing the old one until it is handed this.
+        // renderer is drawing the old one until it is handed this. A pan inside
+        // the margin keeps the fold, which is why a drag does not rebuild it.
         dropFold();
         fold_.grid.remake(xStart_, xStep_, 0, paneBuckets(), viewMin_, viewMax_);
-        if (!fold_.grid.columns.has_value()) {
+        fold_.viewMin = viewMin_;
+        fold_.viewMax = viewMax_;
+        fold_.yLog = yLog_;
+        fold_.armed = fold_.grid.columns.has_value();
+        if (!fold_.armed) {
             return false;
         }
         edgesAlong(*fold_.grid.columns, xStart_, xStep_, fold_.edges);
@@ -704,6 +736,9 @@ bool DatasetPlot::foldedLine(int series, PlotLine& line) const
         if (pyramid == pyramids_.end() || pyramid->second.empty()) {
             return false;
         }
+        // Extremes at the samples they occurred at. An edge lerp is not an
+        // element, and a drawn value has to be one: on this line the value is
+        // the index, and a point that is neither fails the file.
         ColumnFold folded;
         foldColumns(pyramid->second, fold_.edges, folded);
         std::vector<double> xs(folded.positions.size());
@@ -1126,24 +1161,16 @@ void DatasetPlot::refreshDetail()
     // whose exit is a policy in another file is a loop worth bounding here.
     bool filled = false;
 
-    // The pane's own preferred run first, whether or not something coarser in
-    // hand would already have covered it.
+    // The pane's own run first, at the bucket the pane asked for.
     //
-    // wantedLevel() stops asking once *some* held run covers the view at a
-    // bucket no coarser than the pane strictly needs, and that was the right
-    // rule while every run cost a round trip: a run read on the way in is
-    // usually a little finer than the next view out needs, and re-reading the
-    // file to gain a fraction of an octave would have been a round trip spent
-    // on almost nothing. The cost of settling for it is that the pane can be
-    // drawn at up to an octave coarser than it asked -- about one drawn station
-    // per column where it asked for two, which is what kSamplesPerColumn's
-    // slack absorbs.
-    //
-    // Out of a held line that trade has no second side. The finer run is a fold
-    // of a buffer already in hand, so there is nothing to weigh against it, and
-    // the pane gets the resolution it asked for on every frame rather than on
-    // the frames where the ladder happens to line up.
-    if (const std::optional<PlotWindow> own = detailFor(detailBuckets());
+    // detailBuckets() is an octave finer, and wantedLevel() asks for that one
+    // only while nothing held covers the view. Filling it here would make it
+    // the finest covering run, which is the one that is drawn -- a view of
+    // four thousand elements would come back at a step of one instead of two.
+    // Once this run is in hand the view is answered, so the octave finer is
+    // not fetched for it. The next step in is a narrower window, folded from
+    // the pyramid when the pane asks, and that is still not a read.
+    if (const std::optional<PlotWindow> own = detailFor(paneBuckets());
         own.has_value() && fillDetail(*own)) {
         filled = true;
         trimLevels();

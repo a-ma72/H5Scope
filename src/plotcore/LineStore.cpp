@@ -3,12 +3,14 @@
 
 #include "plotcore/LineStore.hpp"
 
+#include "gui/PlotColumns.hpp"
 #include "gui/PlotLevels.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <span>
 #include <utility>
 
 namespace gui {
@@ -430,13 +432,21 @@ void LineStore::setXLog(bool on)
     emitChanged();
 }
 
+void LineStore::setYLog(bool on)
+{
+    if (yLog_ == on) {
+        return;
+    }
+    yLog_ = on;
+    dropFolds();
+    emitChanged();
+}
+
 void LineStore::clearLines()
 {
     lines_.clear();
     axis_ = Entry{};
     hasAxis_ = false;
-    logColumns_.reset();
-    logEdges_.clear();
     retired_.clear();
     length_ = 0;
     minimum_ = 0.0;
@@ -481,6 +491,7 @@ void LineStore::setPaneColumns(int columns)
     // The range has not moved, but the fold it was answered with has. The
     // next call has to run again rather than recognise the same window.
     asked_ = false;
+    dropFolds();
     emitChanged();
 }
 
@@ -493,20 +504,9 @@ void LineStore::setYPerPixel(double value)
     if (value == yPerPixel_ || (scale > 0.0 && std::abs(value - yPerPixel_) <= scale * 1e-3)) {
         return;
     }
+    // Column strokes place entry/exit by geometry, not by a chord tolerance.
+    // Keep the value for hosts that still ask; nothing to rebuild.
     yPerPixel_ = value;
-    // The index window has not moved. The chords were judged against a
-    // different pixel, so the runs are no longer the picture.
-    for (Entry& entry : lines_) {
-        entry.closerValid = false;
-        if (entry.time != nullptr) {
-            entry.time->closerValid = false;
-        }
-    }
-    if (hasAxis_) {
-        axis_.closerValid = false;
-    }
-    refreshCloser();
-    emitChanged();
 }
 
 void LineStore::setVisibleRange(double xMin, double xMax)
@@ -566,61 +566,37 @@ void LineStore::setVisibleRange(double xMin, double xMax)
         if (missing) {
             refreshCloser();
         }
+        refreshColumnStroke();
         return;
     }
     xMin = low;
     xMax = high;
-    // One shared window used to stand for every line. A line with its own
-    // time folds a different index run, so the first line changing is not
-    // the question any more.
-    const auto snap = [](const Entry& entry) {
-        return std::pair<bool, PlotWindow>{entry.closerValid, entry.closerWindow};
-    };
-    std::vector<std::pair<bool, PlotWindow>> before;
-    std::vector<std::pair<bool, PlotWindow>> beforeTime;
-    before.reserve(lines_.size());
-    beforeTime.reserve(lines_.size());
-    for (const Entry& entry : lines_) {
-        before.push_back(snap(entry));
-        beforeTime.push_back(entry.time != nullptr ? snap(*entry.time)
-                                                   : std::pair<bool, PlotWindow>{});
-    }
-    const auto beforeAxis = snap(axis_);
     viewMin_ = xMin;
     viewMax_ = xMax;
     asked_ = true;
     askedMin_ = askedMin;
     askedMax_ = askedMax;
+    // A logarithmic x keeps its column fold while the held grid still serves
+    // the window. Linear draws the closer look refreshCloser just built.
     refreshCloser();
-    bool changed = snap(axis_) != beforeAxis;
-    for (std::size_t i = 0; i < lines_.size(); ++i) {
-        changed = changed || snap(lines_[i]) != before[i];
-        const auto nowTime = lines_[i].time != nullptr ? snap(*lines_[i].time)
-                                                       : std::pair<bool, PlotWindow>{};
-        changed = changed || nowTime != beforeTime[i];
-    }
-    if (changed) {
-        emitChanged();
-    }
+    refreshColumnStroke();
+    emitChanged();
 }
 
 void LineStore::fillInto(std::vector<PlotLine>& lines, PlotAxis& axis)
 {
-    refreshLogFold();
-    // A logarithmic fold already stated its own x. The linear fold of a line
-    // with its own time still has to: the shared axis is a different index.
+    refreshColumnStroke();
+    // A logarithmic fold already stated its own x. A linear line with its own
+    // time still has to: the shared axis is a different index.
     for (Entry& entry : lines_) {
         if (entry.foldValid) {
             continue;
         }
-        // Own time wins. Otherwise a shared clock still has to be read at the
-        // sample the point names. The axis summary is one station per bucket,
-        // and a point added between the extremes is not one of those stations.
+        // Own time wins, and it is the only line that carries x of its own.
+        // A line on the shared clock is placed by that axis, sample for
+        // sample; stating x here makes it a second clock.
         if (entry.hasTime) {
             placeOwnTimes(entry);
-        }
-        else if (hasAxis_) {
-            placeTimes(entry, axis_);
         }
     }
     lines.clear();
@@ -660,6 +636,13 @@ void LineStore::adopt(Entry& entry)
         length_ = std::max(length_, static_cast<long long>(line.count));
     }
     cap_ = pointsFor();
+    if (!entry.foldValues.empty()) {
+        retired_.push_back(std::move(entry.foldValues));
+    }
+    if (!entry.foldXs.empty()) {
+        retired_.push_back(std::move(entry.foldXs));
+    }
+    entry.foldValid = false;
     rebuildWhole(entry);
     recount();
     emitChanged();
@@ -685,6 +668,8 @@ void LineStore::rebuildWhole(Entry& entry)
         entry.wholeSummarised = false;
         return;
     }
+    // Positions stay for time bisection and for placing a line's own time.
+    // A logarithmic x folds them again; a linear one draws this summary.
     if (positions.size() == entry.whole.size()) {
         entry.wholePositions = std::move(positions);
     }
@@ -763,7 +748,7 @@ void LineStore::refreshEntry(Entry& entry, const std::optional<PlotWindow>& want
         }
         return;
     }
-    if (entry.closerValid && entry.closerWindow == *wanted && entry.closerY == yPerPixel_) {
+    if (entry.closerValid && entry.closerWindow == *wanted) {
         return;
     }
     std::vector<double> folded;
@@ -792,16 +777,10 @@ void LineStore::refreshEntry(Entry& entry, const std::optional<PlotWindow>& want
     if (positions.size() != folded.size()) {
         positions.clear();
     }
-    else if (yPerPixel_ > 0.0) {
-        // One pixel of y. The budget is a few points a column: past that the
-        // chord is kept, which is the envelope the pane was already drawing.
-        followCurve(entry.pyramid, folded, positions, yPerPixel_, std::max(columns_, 32) * 8);
-    }
     entry.closerPositions = std::move(positions);
     entry.closer = std::move(folded);
     entry.closerWindow = *wanted;
     entry.closerStep = wanted->bucket == 1 ? 1.0 : static_cast<double>(wanted->bucket) / 2.0;
-    entry.closerY = yPerPixel_;
     entry.closerValid = true;
 }
 
@@ -931,8 +910,8 @@ void LineStore::dropFolds()
         entry.foldValid = false;
         entry.foldSummarised = false;
     }
-    logColumns_.reset();
-    logEdges_.clear();
+    foldGrid_.clear();
+    foldYLog_ = false;
 }
 
 double LineStore::timeAt(const Entry& time, long long at) const
@@ -950,114 +929,64 @@ double LineStore::timeAt(const Entry& time, long long at) const
     return bottom.values[static_cast<std::size_t>(at / bottom.bucket) * 2];
 }
 
-bool LineStore::timeEdges(const Entry& time, const LogColumns& columns, std::vector<double>& out) const
+void LineStore::refreshColumnStroke()
 {
-    out.clear();
-    if (time.pyramid.empty() || columns.density <= 0) {
-        return false;
+    // Linear is the closer look. A column stroke there states its own x for
+    // every line, including one the shared clock is meant to place sample for
+    // sample, and a zoom stops being a run of the line.
+    if (!xLog_) {
+        return;
     }
-    const std::vector<double>& bottom = time.pyramid.levels.front().values;
-    const bool ascending = std::is_sorted(bottom.begin(), bottom.end());
-    const bool descending = !ascending && std::is_sorted(bottom.rbegin(), bottom.rend());
-    if (!ascending && !descending) {
-        return false;
+    double x0 = 0.0;
+    double x1 = 0.0;
+    if (asked_) {
+        x0 = askedMin_;
+        x1 = askedMax_;
+    } else {
+        x0 = xMin();
+        x1 = xMax();
     }
-    const long long length = time.pyramid.length;
-    const auto before = [&](double x) {
-        long long low = 0;
-        long long high = length;
-        while (low < high) {
-            const long long mid = low + (high - low) / 2;
-            const double t = timeAt(time, mid);
-            if (ascending ? t < x : t >= x) {
-                low = mid + 1;
-            } else {
-                high = mid;
-            }
-        }
-        return low;
-    };
-    out.reserve(static_cast<std::size_t>(columns.last - columns.first + 1));
-    for (long long k = columns.first; k <= columns.last; ++k) {
-        out.push_back(static_cast<double>(before(columns.edge(k))));
+    if (!(x1 > x0) || !std::isfinite(x0) || !std::isfinite(x1) || columns_ < 1) {
+        return;
     }
-    if (descending) {
-        std::reverse(out.begin(), out.end());
-    }
-    return out.size() >= 2;
-}
 
-void LineStore::refreshLogFold()
-{
-    if (!xLog_ || !asked_) {
-        if (logColumns_.has_value()) {
-            dropFolds();
-        }
-        return;
-    }
-    // An octave or more, or the linear fold. logColumnsFor is that decision.
-    const std::optional<LogColumns> wanted = logColumnsFor(askedMin_, askedMax_, columns_);
-    if (!wanted.has_value()) {
-        if (logColumns_.has_value()) {
-            dropFolds();
-        }
-        return;
-    }
-    const bool same = logColumns_.has_value() &&
-                      logColumnsServe(*logColumns_, askedMin_, askedMax_, columns_);
-    if (!same) {
+    // Index axis for LineStore strokes: start 0, step 1 (or times). Mode 0.
+    constexpr int kMode = 0;
+    if (!foldGrid_.serves(0.0, 1.0, kMode, columns_, x0, x1) || foldYLog_ != yLog_) {
         dropFolds();
-        logColumns_ = *wanted;
-        logEdges_.clear();
-        // The column grid is one, in time. The index edges are not: a line
-        // with its own time is bisected on its own. These are the edges of
-        // the lines that still share the clock.
-        if (hasAxis_) {
-            if (!timeEdges(axis_, *wanted, logEdges_)) {
-                logEdges_.clear();
-            }
-        } else {
-            bool untimed = false;
-            for (const Entry& entry : lines_) {
-                untimed = untimed || !entry.hasTime;
-            }
-            if (untimed) {
-                edgesAlong(*wanted, 0.0, 1.0, logEdges_);
-            }
-        }
+        foldGrid_.remake(0.0, 1.0, kMode, columns_, x0, x1, xLog_);
+        foldYLog_ = yLog_;
     }
-    if (!logColumns_.has_value()) {
+    double foldMin = 0.0;
+    double foldMax = 0.0;
+    int foldColumns = 0;
+    if (!foldGrid_.extent(foldMin, foldMax, foldColumns)) {
         return;
     }
+
     for (Entry& entry : lines_) {
-        if (entry.foldValid || entry.pyramid.empty()) {
+        if (entry.foldValid || entry.pyramid.empty() || entry.building != nullptr) {
             continue;
         }
-        std::vector<double> ownEdges;
-        const std::vector<double>* edges = &logEdges_;
-        const Entry* time = hasAxis_ ? &axis_ : nullptr;
-        if (entry.hasTime && entry.time != nullptr) {
-            if (!timeEdges(*entry.time, *logColumns_, ownEdges) || ownEdges.size() < 2) {
-                // Not a map. The linear fold places this line by the times
-                // it does have, rather than stretching an index across the
-                // pane.
-                continue;
-            }
-            edges = &ownEdges;
-            time = entry.time.get();
-        } else if (edges->size() < 2) {
+        std::span<const double> times;
+        if (entry.hasTime && entry.time != nullptr && entry.time->values != nullptr &&
+            entry.time->count == entry.count) {
+            times = std::span<const double>(entry.time->values,
+                                            static_cast<std::size_t>(entry.time->count));
+        } else if (hasAxis_ && axis_.values != nullptr && axis_.count == entry.count) {
+            times = std::span<const double>(axis_.values, static_cast<std::size_t>(axis_.count));
+        }
+
+        const double* raw =
+            rawSamples(entry.pyramid, entry.values, static_cast<long long>(entry.count));
+        ColumnStroke stroke;
+        if (!rasterColumns(entry.pyramid, raw, static_cast<long long>(entry.count), times, 0.0, 1.0,
+                           foldMin, foldMax, foldColumns, xLog_, yLog_, stroke)) {
             continue;
         }
-        ColumnFold folded;
-        foldColumns(entry.pyramid, *edges, folded);
-        std::vector<double> xs(folded.positions.size());
-        for (std::size_t i = 0; i < xs.size(); ++i) {
-            const double at = folded.positions[i];
-            xs[i] = time != nullptr ? timeAt(*time, std::llround(at)) : at;
-        }
-        entry.foldValues = std::move(folded.values);
-        entry.foldXs = std::move(xs);
-        entry.foldSummarised = folded.summarised;
+        entry.foldValues = std::move(stroke.values);
+        entry.foldXs = std::move(stroke.xs);
+        entry.foldSummarised = stroke.summarised;
         entry.foldValid = true;
     }
 }
@@ -1093,9 +1022,10 @@ PlotLine LineStore::lineOf(const Entry& entry) const
         }
     }
     // Stated x wins over the shared axis. xOf reads xs and never the position.
-    // Filled for a line's own time and for the shared clock, at the sample
-    // each point names.
-    if (line.values != nullptr && static_cast<qsizetype>(entry.placedXs.size()) == line.count) {
+    // Only a line with its own time carries that: the shared clock places the
+    // others, and an xs here would hide it.
+    if (entry.hasTime && line.values != nullptr &&
+        static_cast<qsizetype>(entry.placedXs.size()) == line.count) {
         line.xs = entry.placedXs.data();
     }
     return line;
@@ -1239,7 +1169,32 @@ std::span<const double> LineStore::drawnValues(int index) const
         return {};
     }
     const Entry& entry = lines_[static_cast<std::size_t>(index)];
+    if (entry.foldValid && !entry.foldValues.empty()) {
+        return entry.foldValues;
+    }
     if (entry.closerValid && !entry.closer.empty()) {
+        // The run is twice the pane, so a pan still has data in hand. What is
+        // drawn is the part the window asked for: the prefetch either side is
+        // not on screen, and a count of the whole run is a count of the next
+        // pan rather than of this picture.
+        if (asked_ && entry.closerStep > 0.0) {
+            const double low = std::min(viewMin_, viewMax_);
+            const double high = std::max(viewMin_, viewMax_);
+            std::size_t begin = entry.closer.size();
+            std::size_t end = 0;
+            for (std::size_t i = 0; i < entry.closer.size(); ++i) {
+                const double at = static_cast<double>(entry.closerWindow.first) +
+                                  static_cast<double>(i) * entry.closerStep;
+                if (at < low || at > high) {
+                    continue;
+                }
+                begin = std::min(begin, i);
+                end = i + 1;
+            }
+            if (begin < end) {
+                return std::span<const double>(entry.closer.data() + begin, end - begin);
+            }
+        }
         return entry.closer;
     }
     return entry.whole;

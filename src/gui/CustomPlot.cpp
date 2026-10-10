@@ -28,6 +28,7 @@
 #include <map>
 #include <memory>
 #include <numeric>
+#include <span>
 #include <optional>
 #include <utility>
 
@@ -1165,10 +1166,23 @@ void CustomPlot::setXLog(bool logarithmic)
     refreshCloser();
 }
 
+void CustomPlot::setYLog(bool logarithmic)
+{
+    if (yLog_ == logarithmic) {
+        return;
+    }
+    yLog_ = logarithmic;
+    dropFold();
+    announce();
+}
+
 std::optional<LogColumns> CustomPlot::foldWanted() const
 {
     const int drawn = seriesCount();
-    if (!xLog_ || drawn == 0 || drawn > kCrowdedLines) {
+    if (drawn == 0 || drawn > kCrowdedLines) {
+        return {};
+    }
+    if (!std::isfinite(viewMin_) || !std::isfinite(viewMax_) || !(viewMax_ > viewMin_)) {
         return {};
     }
     if (xMode_ == Dataset) {
@@ -1183,12 +1197,19 @@ std::optional<LogColumns> CustomPlot::foldWanted() const
     else if (!std::isfinite(xStart_) || !std::isfinite(xStep_) || !(std::abs(xStep_) > 0.0)) {
         return {};
     }
+    // Linear, and a log axis under an octave, are the closer look. A column
+    // stroke there has no position step, so a stretched line and a time base
+    // stop being read where they are drawn. logColumnsFor is the refusal.
+    if (!xLog_) {
+        return {};
+    }
     return logColumnsFor(viewMin_, viewMax_, bucketBudget());
 }
 
 bool CustomPlot::foldServes() const
 {
-    return foldGrid_.serves(xStart_, xStep_, static_cast<int>(xMode_), bucketBudget(), viewMin_,
+    return foldArmed_ && foldYLog_ == yLog_ &&
+           foldGrid_.serves(xStart_, xStep_, static_cast<int>(xMode_), bucketBudget(), viewMin_,
                             viewMax_);
 }
 
@@ -1200,6 +1221,8 @@ void CustomPlot::dropFold() const
         entry.foldGeneration = -1;
     }
     foldGrid_.clear();
+    foldArmed_ = false;
+    foldYLog_ = false;
     ++foldGeneration_;
 }
 
@@ -1282,10 +1305,14 @@ bool CustomPlot::foldedLine(const Entry& entry, PlotLine& line) const
     if (!foldServes()) {
         // Another grid. Every entry's fold goes with the one it was made on --
         // retired rather than freed, because the renderer is drawing them
-        // until it is handed these.
+        // until it is handed these. A pan inside the margin keeps the fold.
         dropFold();
         foldGrid_.remake(xStart_, xStep_, static_cast<int>(xMode_), bucketBudget(), viewMin_,
                          viewMax_);
+        foldViewMin_ = viewMin_;
+        foldViewMax_ = viewMax_;
+        foldYLog_ = yLog_;
+        foldArmed_ = foldGrid_.columns.has_value();
     }
     if (!foldGrid_.columns.has_value()) {
         return false;
@@ -1303,6 +1330,9 @@ bool CustomPlot::foldedLine(const Entry& entry, PlotLine& line) const
         else {
             edgesAlong(*foldGrid_.columns, xStart_, xStep_ * scale, edges);
         }
+        // Extremes at the samples they occurred at, then placed on the axis.
+        // A lerp at a column edge is not a time the file records, and a point
+        // drawn there is a reading of a sample that does not exist.
         ColumnFold folded;
         foldColumns(entry.pyramid, edges, folded);
         std::vector<double> xs(folded.positions.size());
@@ -1457,6 +1487,16 @@ int CustomPlot::closerBuckets() const
     return seriesCount() <= kCrowdedLines ? std::min(2 * pane, kMaxPoints) : pane;
 }
 
+
+void CustomPlot::setYPerPixel(double value)
+{
+    // Kept for the QML/C API shape. Column strokes place entry/exit by
+    // geometry; a y-pixel tolerance is not part of that picture.
+    if (!(value > 0.0) || !std::isfinite(value)) {
+        value = 0.0;
+    }
+    yPerPixel_ = value;
+}
 
 void CustomPlot::setPaneColumns(int columns)
 {
@@ -1781,9 +1821,6 @@ bool CustomPlot::fillCloser(Entry& entry, const PlotWindow& window)
     // elements themselves when the bucket is one. The step stays half a
     // bucket; the positions are the samples the extremes occurred at.
     const double step = window.bucket == 1 ? 1.0 : static_cast<double>(window.bucket) / 2.0;
-    if (positions.size() != folded.size()) {
-        positions.clear();
-    }
     // The same hazard DatasetPlot::takeDetail names: this push_back may
     // reallocate `levels` while the renderer is reading a run already in it, so
     // a Level is move-only-by-noexcept and the relocation cannot be a copy.
@@ -1927,7 +1964,10 @@ void CustomPlot::refreshCloser()
     // hand would have covered it -- see the note there; out of a held line the
     // finer fold has nothing to weigh against it.
     for (Entry& entry : entries_) {
-        if (const std::optional<PlotWindow> own = closerFor(entry, closerBuckets());
+        // The pane's bucket, for DatasetPlot::refreshDetail's reason: the
+        // octave finer is the next step, and drawing it now answers this one
+        // a step ahead of the pane.
+        if (const std::optional<PlotWindow> own = closerFor(entry, bucketBudget());
             own.has_value() && fillCloser(entry, *own)) {
             filled = true;
         }
@@ -2081,9 +2121,9 @@ void CustomPlot::askForCloser()
                     [&window](const Level& level) { return level.window == window; });
                 if (at == entry.levels.end()) {
                     const bool ok = answer.problem.isEmpty();
-                    entry.levels.push_back(
-                        Level{window, answer.step, ok ? std::move(answer.values) : std::vector<double>{},
-                              ok ? std::move(answer.positions) : std::vector<double>{}});
+                    Level level{window, answer.step, ok ? std::move(answer.values) : std::vector<double>{},
+                                ok ? std::move(answer.positions) : std::vector<double>{}};
+                    entry.levels.push_back(std::move(level));
                 }
                 else {
                     at->step = answer.step;

@@ -110,13 +110,15 @@ public:
     /// not a column on that axis. Under an octave the linear fold stays.
     void setXLog(bool on);
 
+    /// Whether y is logarithmic. Column strokes treat non-positive y as a gap.
+    void setYLog(bool on);
+
     void clearLines();
     void setPaneColumns(int columns);
     void setVisibleRange(double xMin, double xMax);
 
-    /// One pixel of the pane, in y units. The closer look uses it to bend a
-    /// chord that leaves the curve by more than that. Zero leaves the two
-    /// extremes of each bucket as they are. A change refolds the runs in hand.
+    /// One pixel of the pane, in y units. Retained for the host API; drawing
+    /// uses PlotColumns entry/exit geometry rather than a chord tolerance.
     void setYPerPixel(double value);
 
     /// A line on an axis of its own leaves the common extent. The request is
@@ -169,9 +171,6 @@ private:
         bool wholeSummarised = false;
         PlotWindow closerWindow;
         double closerStep = 1.0;
-        /// The y pixel the chord was bent with. A different one is a different
-        /// picture, even on the same index window.
-        double closerY = 0.0;
         bool closerValid = false;
         std::vector<double> foldValues;
         std::vector<double> foldXs;
@@ -206,11 +205,10 @@ private:
     void retireBuffers(Entry& entry);
     void rebuildWhole(Entry& entry);
     void refreshCloser();
-    void refreshLogFold();
+    /// Fold every line onto the view's pixel columns (PlotColumns).
+    void refreshColumnStroke();
     void dropFolds();
     [[nodiscard]] double timeAt(const Entry& time, long long at) const;
-    [[nodiscard]] bool timeEdges(const Entry& time, const LogColumns& columns,
-                                 std::vector<double>& out) const;
     /// The index run of `time` that `t0`..`t1` covers. False when the time
     /// is not a map; the caller then keeps the whole-line summary.
     [[nodiscard]] bool indexSpan(Entry& time, double t0, double t1, double& low, double& high);
@@ -233,8 +231,7 @@ private:
     Entry axis_;
     bool hasAxis_ = false;
     bool xLog_ = false;
-    std::optional<LogColumns> logColumns_;
-    std::vector<double> logEdges_;
+    bool yLog_ = false;
     std::vector<std::vector<double>> retired_;
     int columns_ = kDefaultColumns;
     int cap_ = kMinPoints;
@@ -245,6 +242,10 @@ private:
     double askedMin_ = 0.0;
     double askedMax_ = 1.0;
     bool asked_ = false;
+    /// Column-stroke grid covering askedMin_..askedMax_ with margin. A pan
+    /// inside that margin keeps every entry's foldValid stroke.
+    LogFoldGrid foldGrid_;
+    bool foldYLog_ = false;
     long long length_ = 0;
     double minimum_ = 0.0;
     double maximum_ = 1.0;
